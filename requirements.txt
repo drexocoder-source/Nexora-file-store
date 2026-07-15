@@ -1,0 +1,7 @@
+pyrogram==2.0.106
+tgcrypto==1.2.5
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+flask==3.1.0
+gunicorn==23.0.0
+python-dotenv==1.0.1
