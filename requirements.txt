@@ -5,3 +5,4 @@ asyncpg==0.30.0
 flask==3.1.0
 gunicorn==23.0.0
 python-dotenv==1.0.1
+kurigram==2.2.23
