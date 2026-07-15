@@ -53,6 +53,14 @@ EMOJI_FLAG_IN = "6138853050309150669"    # 🇮🇳 branding flourish
 EMOJI_MIC = "5258500422393415126"        # 🎤 broadcast / announce
 EMOJI_SPARKLE = "5222108309795908493"    # ✨ create / highlight / stats
 
+def remoji(fallback: str, custom_id: str | None = None) -> str:
+    """
+    Returns a normal emoji.
+
+    Telegram only supports custom emoji inside message entities,
+    not plain strings, so this simply returns the fallback emoji.
+    """
+    return fallback
 
 def btn(
     style,
