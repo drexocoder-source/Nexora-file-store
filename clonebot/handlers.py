@@ -17,6 +17,9 @@ from pyrogram.enums import ChatType
 from pyrogram.errors import RPCError, UserIsBlocked, PeerIdInvalid, UsernameNotOccupied
 from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.engine import AsyncSessionLocal
 from database.models import Bot as BotModel
@@ -87,6 +90,25 @@ async def _log_event(client: Client, bot_row: BotModel, text: str) -> None:
         log.exception("Failed to write clone log for bot %s", bot_row.id)
 
 
+# Every place we later touch bot_row.channels / .settings / .files as a plain
+# attribute needs those relationships eagerly loaded up front. Lazy-loading a
+# relationship on an object bound to an AsyncSession triggers implicit IO
+# that only works inside the greenlet context set up by session.execute();
+# touching it as a bare attribute outside that raises
+# sqlalchemy.exc.MissingGreenlet. selectinload() sidesteps this by loading
+# everything as part of the initial query.
+async def _get_bot(session: AsyncSession, bot_id: int) -> BotModel | None:
+    return await session.get(
+        BotModel,
+        bot_id,
+        options=[
+            selectinload(BotModel.channels),
+            selectinload(BotModel.settings),
+            selectinload(BotModel.files),
+        ],
+    )
+
+
 async def _record_owner_action(bot_id: int, action: str) -> None:
     async with AsyncSessionLocal() as session:
         session.add(OwnerLog(bot_id=bot_id, action=action))
@@ -135,7 +157,7 @@ def register_clone_handlers(app: Client) -> None:
         payload = message.command[1] if len(message.command) > 1 else None
 
         async with AsyncSessionLocal() as session:
-            bot_row = await session.get(BotModel, bot_id)
+            bot_row = await _get_bot(session, bot_id)
             owner_result = await session.execute(select(Owner).where(Owner.id == bot_row.owner_id))
             owner = owner_result.scalar_one()
             settings_row = bot_row.settings or BotSettings(bot_id=bot_id)
@@ -232,7 +254,7 @@ def register_clone_handlers(app: Client) -> None:
     async def verify_cb(client: Client, cq: CallbackQuery) -> None:
         payload = cq.data.split(":", 1)[1] or None
         async with AsyncSessionLocal() as session:
-            bot_row = await session.get(BotModel, bot_id)
+            bot_row = await _get_bot(session, bot_id)
             channels = list(bot_row.channels)
             settings_row = bot_row.settings
 
@@ -303,7 +325,7 @@ def register_clone_handlers(app: Client) -> None:
     async def _dispatch_owner_action(client: Client, user_id: int, target: Message, action: str) -> None:
         if action == "own:channels":
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await _get_bot(session, bot_id)
                 channels = list(bot_row.channels)
             lines = ["**Force Subscribe Channels**", ""]
             rows = []
@@ -367,7 +389,7 @@ def register_clone_handlers(app: Client) -> None:
 
         elif action == "own:delall_yes":
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await _get_bot(session, bot_id)
                 for f in list(bot_row.files):
                     await session.delete(f)
                 await session.commit()
@@ -380,7 +402,7 @@ def register_clone_handlers(app: Client) -> None:
         elif action.startswith("own:toggle:"):
             field = action.split(":")[2]
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await _get_bot(session, bot_id)
                 s = bot_row.settings
                 setattr(s, field, not getattr(s, field))
                 await session.commit()
@@ -423,7 +445,7 @@ def register_clone_handlers(app: Client) -> None:
 
         elif action == "own:backup":
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await _get_bot(session, bot_id)
                 payload = {
                     "bot_username": bot_row.bot_username,
                     "welcome_caption": bot_row.welcome_caption,
@@ -454,7 +476,7 @@ def register_clone_handlers(app: Client) -> None:
 
     async def _render_settings(target: Message, edit: bool = False) -> None:
         async with AsyncSessionLocal() as session:
-            bot_row = await session.get(BotModel, bot_id)
+            bot_row = await _get_bot(session, bot_id)
             s = bot_row.settings
 
         def dot(v: bool) -> str:
@@ -575,7 +597,7 @@ def register_clone_handlers(app: Client) -> None:
             await message.reply_text(f"{TXT_ERR} This bot must be an admin of that channel first.")
             return
         async with AsyncSessionLocal() as session:
-            bot_row = await session.get(BotModel, bot_id)
+            bot_row = await _get_bot(session, bot_id)
             bot_row.log_channel = chat.id
             await session.commit()
         clone_pending.pop((bot_id, message.from_user.id), None)
@@ -584,7 +606,7 @@ def register_clone_handlers(app: Client) -> None:
 
     async def _run_broadcast(client: Client, owner_user_id: int, source: Message, reply_target: Message) -> None:
         async with AsyncSessionLocal() as session:
-            bot_row = await session.get(BotModel, bot_id)
+            bot_row = await _get_bot(session, bot_id)
             result = await session.execute(select(CloneUser.user_id).where(CloneUser.bot_id == bot_id))
             user_ids = [row[0] for row in result.all()]
             from database.models import Broadcast
