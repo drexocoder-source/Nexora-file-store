@@ -16,12 +16,22 @@ from database.models import Bot as BotModel
 from database.models import BotSettings, Owner
 from keyboards import (
     BLUE,
+    DANGER,
+    DEFAULT,
+    EMOJI_DEVIL,
+    EMOJI_FLAG_IN,
     EMOJI_GUARD,
+    EMOJI_MIC,
+    EMOJI_OCTAGON,
     EMOJI_PHONE,
+    EMOJI_SIREN,
     EMOJI_SPARKLE,
     EMOJI_STOP,
+    EMOJI_TOOLS,
     GREEN,
+    PRIMARY,
     RED,
+    SUCCESS,
     SUPPORT_URL,
     TXT_ERR,
     TXT_INFO,
@@ -32,6 +42,7 @@ from keyboards import (
     btn,
     main_menu_kb,
     quote,
+    remoji,
     yes_no_kb,
 )
 from utils.state import PendingAction, main_pending
@@ -41,19 +52,19 @@ log = logging.getLogger("nexora.mainbot")
 STATS_IMAGE_URL = "https://graph.org/file/4e9cfe6722a743d0a791e-010fd8c5e3567948b8.jpg"
 
 WELCOME_TEXT = (
-    "**Nexora File Store**\n\n"
+    f"{remoji('🇮🇳', EMOJI_FLAG_IN)} **Nexora File Store**\n\n"
     "Create your own Telegram File Store Bot.\n\n"
     "No coding required.\n\n"
     "• Unlimited Files\n"
-    "• Force Subscribe\n"
-    "• Broadcast\n"
-    "• Logs\n"
-    "• Statistics\n"
-    "• Owner Panel"
+    f"• {remoji('😈', EMOJI_DEVIL)} Force Subscribe\n"
+    f"• {remoji('🎤', EMOJI_MIC)} Broadcast\n"
+    f"• {remoji('🚨', EMOJI_SIREN)} Logs\n"
+    f"• {remoji('✨', EMOJI_SPARKLE)} Statistics\n"
+    f"• {remoji('💂', EMOJI_GUARD)} Owner Panel"
 )
 
 HELP_TEXT = (
-    "**How it works**\n\n"
+    f"{remoji('🛠', EMOJI_TOOLS)} **How it works**\n\n"
     "**Step 1**\n"
     "Talk to @BotFather, create a bot, and copy its token.\n\n"
     "**Step 2**\n"
@@ -61,7 +72,7 @@ HELP_TEXT = (
     "Done — your own file store bot is live."
 )
 
-SUPPORT_TEXT = f"Need help? Reach out to Nexora Support:\n\n{SUPPORT_URL}"
+SUPPORT_TEXT = f"{remoji('📞', EMOJI_PHONE)} Need help? Reach out to Nexora Support:\n\n{SUPPORT_URL}"
 
 
 async def _log_main(client: Client, text: str) -> None:
@@ -105,7 +116,7 @@ def register_main_handlers(app: Client) -> None:
     async def newbot_cmd(client: Client, message: Message) -> None:
         main_pending[message.from_user.id] = PendingAction("await_token")
         await message.reply_text(
-            f"{TXT_INFO} Send me the bot token you copied from @BotFather.",
+            f"{TXT_INFO} {remoji('✨', EMOJI_SPARKLE)} Send me the bot token you copied from @BotFather.",
             reply_markup=back_kb(),
         )
 
@@ -134,9 +145,11 @@ def register_main_handlers(app: Client) -> None:
         rows = []
         for b in bots:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
-            rows.append([btn(BLUE, f"Open {label}", f"openpanel:{b.id}")])
-        rows.append([btn(RED, "Back", "home")])
-        await target.reply_text("**Your Bots**", reply_markup=InlineKeyboardMarkup(rows))
+            rows.append([btn(SUCCESS, f"Open {label}", f"openpanel:{b.id}", icon=EMOJI_GUARD)])
+        rows.append([btn(DANGER, "Back", "home", icon=EMOJI_OCTAGON)])
+        await target.reply_text(
+            f"{remoji('💂', EMOJI_GUARD)} **Your Bots**", reply_markup=InlineKeyboardMarkup(rows)
+        )
 
     async def _send_rmbot_list(client: Client, user_id: int, target: Message) -> None:
         async with AsyncSessionLocal() as session:
@@ -152,9 +165,11 @@ def register_main_handlers(app: Client) -> None:
         rows = []
         for b in bots:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
-            rows.append([btn(RED, f"Delete {label}", f"rmbot:{b.id}")])
-        rows.append([btn(BLUE, "Back", "home")])
-        await target.reply_text("**Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows))
+            rows.append([btn(DANGER, f"Delete {label}", f"rmbot:{b.id}", icon=EMOJI_STOP)])
+        rows.append([btn(PRIMARY, "Back", "home", icon=EMOJI_OCTAGON)])
+        await target.reply_text(
+            f"{remoji('⛔️', EMOJI_STOP)} **Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows)
+        )
 
     @app.on_message(filters.private & filters.text & ~filters.command(["start", "help", "newbot", "mybots", "rmbot", "support"]))
     async def text_router(client: Client, message: Message) -> None:
@@ -175,7 +190,7 @@ def register_main_handlers(app: Client) -> None:
             )
             return
 
-        status_msg = await message.reply_text(f"{TXT_WARN} Checking token...")
+        status_msg = await message.reply_text(f"{TXT_WARN} {remoji('🛠', EMOJI_TOOLS)} Checking token...")
 
         probe = Client(
             name=f"probe_{message.from_user.id}",
@@ -233,23 +248,24 @@ def register_main_handlers(app: Client) -> None:
 
         await _log_main(
             client,
-            f"➕ New clone bot created\nOwner: {message.from_user.id} (@{message.from_user.username})\n"
+            f"{remoji('🚨', EMOJI_SIREN)} ➕ New clone bot created\n"
+            f"Owner: {message.from_user.id} (@{message.from_user.username})\n"
             f"Bot: @{bot_username} (id {bot_id})",
         )
 
         await status_msg.edit_text(
-            "**Bot Created Successfully**\n\nNow finish setup.\n\n"
-            "**⚠ Setup Required**\n"
-            "1. Add Force Subscribe channels\n"
+            f"{remoji('✨', EMOJI_SPARKLE)} **Bot Created Successfully**\n\nNow finish setup.\n\n"
+            f"{remoji('🛠', EMOJI_TOOLS)} **Setup Required**\n"
+            f"1. {remoji('😈', EMOJI_DEVIL)} Add Force Subscribe channels\n"
             "2. Add folder invite links (optional)\n"
             "3. Make your clone bot an admin in those channels\n"
             "4. Upload files\n"
-            "5. Start receiving users\n\n"
+            f"5. {remoji('🎤', EMOJI_MIC)} Start receiving users\n\n"
             f"Open @{bot_username} and send `/owner` to configure it.",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [btn(BLUE, "Open Bot", url=f"https://t.me/{bot_username}")],
-                    [btn(YELLOW, "My Bots", "mybots")],
+                    [btn(SUCCESS, "Open Bot", url=f"https://t.me/{bot_username}", icon=EMOJI_GUARD)],
+                    [btn(DEFAULT, "My Bots", "mybots", icon=EMOJI_TOOLS)],
                 ]
             ),
         )
@@ -269,7 +285,8 @@ def register_main_handlers(app: Client) -> None:
         elif data == "newbot":
             main_pending[user_id] = PendingAction("await_token")
             await cq.message.edit_text(
-                f"{TXT_INFO} Send me the bot token you copied from @BotFather.", reply_markup=back_kb()
+                f"{TXT_INFO} {remoji('✨', EMOJI_SPARKLE)} Send me the bot token you copied from @BotFather.",
+                reply_markup=back_kb(),
             )
         elif data == "mybots":
             await _send_mybots(client, user_id, cq.message)
@@ -281,12 +298,13 @@ def register_main_handlers(app: Client) -> None:
                 await cq.answer("Bot not found", show_alert=True)
                 return
             await cq.message.edit_text(
-                f"@{bot_row.bot_username}\n\nOpen the bot and send `/owner` to manage it.",
+                f"{remoji('💂', EMOJI_GUARD)} @{bot_row.bot_username}\n\n"
+                "Open the bot and send `/owner` to manage it.",
                 reply_markup=InlineKeyboardMarkup(
                     [
-                        [btn(BLUE, "Open Bot", url=f"https://t.me/{bot_row.bot_username}")],
-                        [btn(RED, "Delete this bot", f"rmbot:{bot_row.id}")],
-                        [btn(YELLOW, "Back", "mybots")],
+                        [btn(SUCCESS, "Open Bot", url=f"https://t.me/{bot_row.bot_username}", icon=EMOJI_GUARD)],
+                        [btn(DANGER, "Delete this bot", f"rmbot:{bot_row.id}", icon=EMOJI_STOP)],
+                        [btn(DEFAULT, "Back", "mybots", icon=EMOJI_OCTAGON)],
                     ]
                 ),
             )
@@ -299,7 +317,8 @@ def register_main_handlers(app: Client) -> None:
                 return
             label = f"@{bot_row.bot_username}" if bot_row.bot_username else f"Bot #{bot_row.id}"
             await cq.message.edit_text(
-                f"Delete **{label}**? This removes all of its files, channels and users.",
+                f"{remoji('⛔️', EMOJI_STOP)} Delete **{label}**? "
+                "This removes all of its files, channels and users.",
                 reply_markup=yes_no_kb(f"rmbot_yes:{bot_id}", "mybots"),
             )
         elif data.startswith("rmbot_yes:"):
@@ -313,8 +332,12 @@ def register_main_handlers(app: Client) -> None:
                 await session.delete(bot_row)
                 await session.commit()
             await manager.stop_clone(bot_id)
-            await _log_main(client, f"🗑 Clone bot deleted: @{username} (id {bot_id})")
-            await cq.message.edit_text(f"{TXT_ERR} Deleted.", reply_markup=back_kb())
+            await _log_main(
+                client, f"{remoji('🚨', EMOJI_SIREN)} 🗑 Clone bot deleted: @{username} (id {bot_id})"
+            )
+            await cq.message.edit_text(
+                f"{TXT_ERR} {remoji('⛔️', EMOJI_STOP)} Deleted.", reply_markup=back_kb()
+            )
         elif data == "rmbot_list":
             await _send_rmbot_list(client, user_id, cq.message)
 
