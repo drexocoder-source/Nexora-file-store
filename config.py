@@ -33,7 +33,8 @@ class Settings:
     database_url: str = _require("NEON_DATABASE_URL")
 
     # Telegram numeric user id of the person who administers Nexora itself.
-    main_owner_id: int = int(os.environ.get("MAIN_BOT_OWNER_ID", "0"))
+    # Defaults to the known owner ID; can be overridden via env var.
+    main_owner_id: int = int(os.environ.get("MAIN_BOT_OWNER_ID", "8186068163"))
 
     # Channel/group id where Nexora posts its own operational logs
     # (new owner, new clone created, clone deleted, errors).

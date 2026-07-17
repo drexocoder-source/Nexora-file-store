@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 
 from sqlalchemy import (
     BigInteger,
@@ -42,6 +43,7 @@ class Bot(Base):
     bot_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bot_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     bot_photo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bot_type: Mapped[str] = mapped_column(String(32), default="filestore", server_default="filestore")
     welcome_caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     welcome_image: Mapped[str | None] = mapped_column(Text, nullable=True)
     log_channel: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -56,6 +58,9 @@ class Bot(Base):
     broadcasts: Mapped[list["Broadcast"]] = relationship(back_populates="bot", cascade="all, delete-orphan")
     settings: Mapped["BotSettings"] = relationship(
         back_populates="bot", uselist=False, cascade="all, delete-orphan"
+    )
+    protected_links: Mapped[list["ProtectedLink"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
     )
 
 
@@ -98,6 +103,21 @@ class UploadedFile(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     bot: Mapped["Bot"] = relationship(back_populates="files")
+
+
+class ProtectedLink(Base):
+    """A URL protected behind the bot's force-subscribe gate."""
+    __tablename__ = "protected_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    token: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=lambda: secrets.token_urlsafe(12))
+    original_url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    click_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    bot: Mapped["Bot"] = relationship(back_populates="protected_links")
 
 
 class CloneUser(Base):
