@@ -41,15 +41,10 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Incremental migrations — safe to run on every startup (all are idempotent).
+        # Incremental migrations — idempotent, safe on every startup.
+        # ADD COLUMN IF NOT EXISTS avoids dollar-quoting (asyncpg treats $ as a placeholder).
         migrations = [
-            # v2: bot type (filestore / linkprotect)
-            """
-            DO $ BEGIN
-                ALTER TABLE bots ADD COLUMN bot_type VARCHAR(32) NOT NULL DEFAULT 'filestore';
-            EXCEPTION WHEN duplicate_column THEN NULL;
-            END $;
-            """,
+            "ALTER TABLE bots ADD COLUMN IF NOT EXISTS bot_type VARCHAR(32) NOT NULL DEFAULT 'filestore';",
         ]
         for sql in migrations:
             await conn.execute(text(sql))
