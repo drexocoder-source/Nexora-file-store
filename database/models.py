@@ -185,3 +185,14 @@ class OwnerLog(Base):
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
     action: Mapped[str] = mapped_column(Text)
     time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MainBotChannel(Base):
+    """Force-subscribe channels required by the main Nexora bot itself."""
+    __tablename__ = "main_bot_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, default=True)

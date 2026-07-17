@@ -40,6 +40,7 @@ from keyboards import (
     back_kb, btn, quote, yes_no_kb,
 )
 from utils.fsub import missing_channels
+from utils.notify import notify_owner
 from utils.state import PendingAction, clone_pending
 
 log = logging.getLogger("nexora.clonebot")
@@ -117,42 +118,42 @@ def owner_panel_kb(bot_type: str = "filestore") -> InlineKeyboardMarkup:
     if bot_type == "linkprotect":
         return InlineKeyboardMarkup([
             [
-                btn(BLUE,   "🔗 My Links",    "own:links",     icon=EMOJI_LINK),
-                btn(BLUE,   "➕ Add Link",    "own:addlink",   icon=EMOJI_SPARKLE),
+                btn(BLUE,   "My Links",    "own:links",     icon=EMOJI_LINK),
+                btn(BLUE,   "Add Link",    "own:addlink",   icon=EMOJI_SPARKLE),
             ],
             [
-                btn(YELLOW, "📣 Broadcast",   "own:broadcast", icon=EMOJI_MIC),
-                btn(YELLOW, "📊 Stats",       "own:stats",     icon=EMOJI_CHART),
+                btn(YELLOW, "Broadcast",   "own:broadcast", icon=EMOJI_MIC),
+                btn(YELLOW, "Stats",       "own:stats",     icon=EMOJI_CHART),
             ],
             [
-                btn(YELLOW, "📺 Channels",    "own:channels",  icon=EMOJI_GUARD),
-                btn(YELLOW, "⚙️ Settings",   "own:settings",  icon=EMOJI_TOOLS),
+                btn(YELLOW, "Channels",    "own:channels",  icon=EMOJI_GUARD),
+                btn(YELLOW, "Settings",    "own:settings",  icon=EMOJI_TOOLS),
             ],
             [
-                btn(YELLOW, "🚨 Logs",        "own:logs",      icon=EMOJI_SIREN),
-                btn(BLUE,   "💾 Backup",      "own:backup"),
+                btn(YELLOW, "Logs",        "own:logs",      icon=EMOJI_SIREN),
+                btn(BLUE,   "Backup",      "own:backup",    icon=EMOJI_STAR),
             ],
-            [btn(RED,    "❌ Close",          "own:close",     icon=EMOJI_OCTAGON)],
+            [btn(RED,    "Close",          "own:close",     icon=EMOJI_OCTAGON)],
         ])
     # filestore
     return InlineKeyboardMarkup([
         [
-            btn(BLUE,   "📺 Channels",    "own:channels",  icon=EMOJI_GUARD),
-            btn(BLUE,   "📤 Upload Files","own:upload",    icon=EMOJI_SPARKLE),
+            btn(BLUE,   "Channels",    "own:channels",  icon=EMOJI_GUARD),
+            btn(BLUE,   "Upload Files","own:upload",    icon=EMOJI_SPARKLE),
         ],
         [
-            btn(YELLOW, "📣 Broadcast",   "own:broadcast", icon=EMOJI_MIC),
-            btn(YELLOW, "📂 Files",       "own:files",     icon=EMOJI_FOLDER),
+            btn(YELLOW, "Broadcast",   "own:broadcast", icon=EMOJI_MIC),
+            btn(YELLOW, "Files",       "own:files",     icon=EMOJI_FOLDER),
         ],
         [
-            btn(YELLOW, "⚙️ Settings",   "own:settings",  icon=EMOJI_TOOLS),
-            btn(BLUE,   "📊 Stats",       "own:stats",     icon=EMOJI_CHART),
+            btn(YELLOW, "Settings",    "own:settings",  icon=EMOJI_TOOLS),
+            btn(BLUE,   "Stats",       "own:stats",     icon=EMOJI_CHART),
         ],
         [
-            btn(YELLOW, "🚨 Logs",        "own:logs",      icon=EMOJI_SIREN),
-            btn(BLUE,   "💾 Backup",      "own:backup"),
+            btn(YELLOW, "Logs",        "own:logs",      icon=EMOJI_SIREN),
+            btn(BLUE,   "Backup",      "own:backup",    icon=EMOJI_STAR),
         ],
-        [btn(RED,    "❌ Close",          "own:close",     icon=EMOJI_OCTAGON)],
+        [btn(RED,    "Close",          "own:close",     icon=EMOJI_OCTAGON)],
     ])
 
 
@@ -195,6 +196,12 @@ def register_clone_handlers(app: Client) -> None:
                     f"ID: `{message.from_user.id}`\n"
                     f"Time: {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}",
                 )
+                handle = f"@{message.from_user.username}" if message.from_user.username else f"id:{message.from_user.id}"
+                await notify_owner(
+                    f"👤 **New user** joined @{bot_row.bot_username}\n"
+                    f"Name: {message.from_user.first_name}  {handle}\n"
+                    f"ID: `{message.from_user.id}`"
+                )
             else:
                 clone_user.last_seen = datetime.now(timezone.utc)
 
@@ -212,10 +219,10 @@ def register_clone_handlers(app: Client) -> None:
             for ch in missing:
                 label = ch.title or ch.username or "Channel"
                 if ch.username:
-                    rows.append([btn(BLUE, f"📲 Join {label}", url=f"https://t.me/{ch.username}", icon=EMOJI_DEVIL)])
+                    rows.append([btn(BLUE, f"Join {label}", url=f"https://t.me/{ch.username}", icon=EMOJI_DEVIL)])
                 else:
-                    rows.append([btn(BLUE, f"📲 {label}", "noop", icon=EMOJI_DEVIL)])
-            rows.append([btn(GREEN, "✅ Verify Membership", f"verify:{payload or ''}", icon=EMOJI_CHECK)])
+                    rows.append([btn(BLUE, label, "noop", icon=EMOJI_DEVIL)])
+            rows.append([btn(GREEN, "Verify Membership", f"verify:{payload or ''}", icon=EMOJI_CHECK)])
             try:
                 await message.reply_photo(
                     IMG_CLONE,
@@ -373,6 +380,12 @@ def register_clone_handlers(app: Client) -> None:
             f"ID: `{cq.from_user.id}`\n"
             f"Time: {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}",
         )
+        handle = f"@{cq.from_user.username}" if cq.from_user.username else f"id:{cq.from_user.id}"
+        await notify_owner(
+            f"✅ **User verified** in @{bot_row2.bot_username}\n"
+            f"Name: {cq.from_user.first_name}  {handle}\n"
+            f"ID: `{cq.from_user.id}`"
+        )
 
         protect = settings_row.protect_content if settings_row else False
         if bot_type == "linkprotect":
@@ -456,9 +469,9 @@ def register_clone_handlers(app: Client) -> None:
             for ch in channels:
                 label = ch.title or ch.username or str(ch.chat_id)
                 lines.append(f"• {label}")
-                rows.append([btn(RED, f"🗑 Remove {label}", f"own:rmch:{ch.id}", icon=EMOJI_TRASH)])
-            rows.append([btn(BLUE, "➕ Add Channel", "own:addch", icon=EMOJI_SPARKLE)])
-            rows.append([btn(YELLOW, "🔙 Back", "own:home", icon=EMOJI_OCTAGON)])
+                rows.append([btn(RED, f"Remove {label}", f"own:rmch:{ch.id}", icon=EMOJI_TRASH)])
+            rows.append([btn(BLUE, "Add Channel", "own:addch", icon=EMOJI_SPARKLE)])
+            rows.append([btn(YELLOW, "Back", "own:home", icon=EMOJI_OCTAGON)])
             await target.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
         elif action == "own:addch":
@@ -474,7 +487,7 @@ def register_clone_handlers(app: Client) -> None:
             await target.reply_text(
                 f"{TXT_INFO} 📤 Send the files you want to store — videos, documents, photos, audio, anything.\n"
                 "Press **Done** when finished.",
-                reply_markup=InlineKeyboardMarkup([[btn(RED, "✅ Done", "own:upload_done", icon=EMOJI_CHECK)]]),
+                reply_markup=InlineKeyboardMarkup([[btn(RED, "Done", "own:upload_done", icon=EMOJI_CHECK)]]),
             )
 
         elif action == "own:upload_done":
@@ -488,7 +501,7 @@ def register_clone_handlers(app: Client) -> None:
             clone_pending[(bot_id, user_id)] = PendingAction("await_broadcast")
             await target.reply_text(
                 f"{TXT_INFO} 📣 Send (or forward) the message you want to broadcast to all users.",
-                reply_markup=InlineKeyboardMarkup([[btn(RED, "❌ Cancel", "own:home", icon=EMOJI_OCTAGON)]]),
+                reply_markup=InlineKeyboardMarkup([[btn(RED, "Cancel", "own:home", icon=EMOJI_OCTAGON)]]),
             )
 
         # ── files (filestore) ──
@@ -507,8 +520,8 @@ def register_clone_handlers(app: Client) -> None:
             await target.reply_text(
                 "\n".join(lines),
                 reply_markup=InlineKeyboardMarkup([
-                    [btn(RED, "🗑 Delete All Files", "own:delall", icon=EMOJI_TRASH)],
-                    [btn(YELLOW, "🔙 Back", "own:home", icon=EMOJI_OCTAGON)],
+                    [btn(RED, "Delete All Files", "own:delall", icon=EMOJI_TRASH)],
+                    [btn(YELLOW, "Back", "own:home", icon=EMOJI_OCTAGON)],
                 ]),
             )
 
@@ -544,9 +557,9 @@ def register_clone_handlers(app: Client) -> None:
             for lk in links:
                 alias = f"https://t.me/{me.username}?start=lp_{lk.token}"
                 lines.append(f"• **{lk.title or 'Untitled'}**\n  Clicks: {lk.click_count}\n  Alias: `{alias}`")
-                rows.append([btn(RED, f"🗑 Delete: {lk.title or lk.token[:8]}", f"own:rmlink:{lk.id}", icon=EMOJI_TRASH)])
-            rows.append([btn(BLUE, "➕ Add Link", "own:addlink", icon=EMOJI_SPARKLE)])
-            rows.append([btn(YELLOW, "🔙 Back", "own:home", icon=EMOJI_OCTAGON)])
+                rows.append([btn(RED, f"Delete: {lk.title or lk.token[:8]}", f"own:rmlink:{lk.id}", icon=EMOJI_TRASH)])
+            rows.append([btn(BLUE, "Add Link", "own:addlink", icon=EMOJI_SPARKLE)])
+            rows.append([btn(YELLOW, "Back", "own:home", icon=EMOJI_OCTAGON)])
             await target.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
         elif action == "own:addlink":

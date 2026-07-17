@@ -16,19 +16,21 @@ from clonebot.handlers import register_clone_handlers
 from config import settings
 from database.engine import AsyncSessionLocal
 from database.models import Bot as BotModel
-from database.models import BotSettings, CloneUser, Owner
+from database.models import BotSettings, CloneUser, MainBotChannel, Owner
 from keyboards import (
     BLUE, DANGER, DEFAULT, GREEN, PRIMARY, RED, SUCCESS, YELLOW,
     EMOJI_BELL, EMOJI_CHART, EMOJI_CHECK, EMOJI_CROWN, EMOJI_DEVIL,
     EMOJI_FIRE, EMOJI_FLAG_IN, EMOJI_FOLDER, EMOJI_GLOBE, EMOJI_GUARD,
     EMOJI_LINK, EMOJI_MIC, EMOJI_OCTAGON, EMOJI_PHONE, EMOJI_SIREN,
-    EMOJI_SPARKLE, EMOJI_STOP, EMOJI_TOOLS, EMOJI_TRASH,
+    EMOJI_SPARKLE, EMOJI_STOP, EMOJI_TOOLS, EMOJI_TRASH, EMOJI_X,
     IMG_ADMIN, IMG_CLONE, IMG_WELCOME,
     SUPPORT_URL,
     TXT_ERR, TXT_INFO, TXT_OK, TXT_WARN,
     admin_menu_kb, back_kb, btn, main_menu_kb, quote,
-    remoji, template_kb, yes_no_kb,
+    template_kb, yes_no_kb,
 )
+from utils.fsub import missing_channels
+from utils.notify import notify_owner
 from utils.state import PendingAction, main_pending
 
 log = logging.getLogger("nexora.mainbot")
@@ -92,13 +94,53 @@ def register_main_handlers(app: Client) -> None:
     # ── /start ────────────────────────────────────────────────────────────────
     @app.on_message(filters.command("start") & filters.private)
     async def start_cmd(client: Client, message: Message) -> None:
-        main_pending.pop(message.from_user.id, None)
-        try:
-            await message.reply_photo(
-                IMG_WELCOME,
-                caption=WELCOME_TEXT,
-                reply_markup=main_menu_kb(),
+        user = message.from_user
+        main_pending.pop(user.id, None)
+
+        # ── Main-bot force-subscribe check ────────────────────────────────────
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(MainBotChannel))
+            main_channels = result.scalars().all()
+
+        if main_channels:
+            missing = await missing_channels(client, list(main_channels), user.id)
+            if missing:
+                rows = []
+                for ch in missing:
+                    label = ch.title or ch.username or "Channel"
+                    link  = f"https://t.me/{ch.username}" if ch.username else None
+                    rows.append([
+                        btn(BLUE, f"Join {label}", url=link, icon=EMOJI_DEVIL)
+                        if link else btn(BLUE, label, "noop_main", icon=EMOJI_DEVIL)
+                    ])
+                rows.append([btn(GREEN, "Verify Membership", "main_verify", icon=EMOJI_CHECK)])
+                caption = (
+                    "👋 **Welcome to Nexora File Store!**\n\n"
+                    "Join the required channels below, then press **Verify Membership**."
+                )
+                try:
+                    await message.reply_photo(IMG_WELCOME, caption=caption,
+                                              reply_markup=InlineKeyboardMarkup(rows))
+                except RPCError:
+                    await message.reply_text(caption, reply_markup=InlineKeyboardMarkup(rows))
+                return
+
+        # ── First-time user notification ──────────────────────────────────────
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(select(Owner).where(Owner.telegram_id == user.id))
+            is_new = res.scalar_one_or_none() is None
+
+        if is_new:
+            handle = f"@{user.username}" if user.username else f"id:{user.id}"
+            await notify_owner(
+                f"👤 **New user** started the main bot\n"
+                f"Name: {user.first_name}\n"
+                f"Username: {handle}\n"
+                f"ID: `{user.id}`"
             )
+
+        try:
+            await message.reply_photo(IMG_WELCOME, caption=WELCOME_TEXT, reply_markup=main_menu_kb())
         except RPCError:
             await message.reply_text(WELCOME_TEXT, reply_markup=main_menu_kb())
 
@@ -168,9 +210,8 @@ def register_main_handlers(app: Client) -> None:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
             icon_map = {"linkprotect": EMOJI_LINK, "filestore": EMOJI_FOLDER}
             icon = icon_map.get(b.bot_type or "filestore", EMOJI_FOLDER)
-            type_tag = "🔗" if b.bot_type == "linkprotect" else "📁"
-            rows.append([btn(SUCCESS, f"{type_tag} {label}", f"openpanel:{b.id}", icon=icon)])
-        rows.append([btn(DANGER, "🔙 Back", "home", icon=EMOJI_OCTAGON)])
+            rows.append([btn(SUCCESS, label, f"openpanel:{b.id}", icon=icon)])
+        rows.append([btn(DANGER, "Back", "home", icon=EMOJI_OCTAGON)])
         await target.reply_text(
             f"💂 **Your Bots** ({len(bots)} total)", reply_markup=InlineKeyboardMarkup(rows)
         )
@@ -189,8 +230,8 @@ def register_main_handlers(app: Client) -> None:
         rows = []
         for b in bots:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
-            rows.append([btn(DANGER, f"🗑 Delete {label}", f"rmbot:{b.id}", icon=EMOJI_TRASH)])
-        rows.append([btn(PRIMARY, "🔙 Back", "home", icon=EMOJI_OCTAGON)])
+            rows.append([btn(DANGER, f"Delete {label}", f"rmbot:{b.id}", icon=EMOJI_TRASH)])
+        rows.append([btn(PRIMARY, "Back", "home", icon=EMOJI_OCTAGON)])
         await target.reply_text(
             "⛔ **Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows)
         )
@@ -208,6 +249,8 @@ def register_main_handlers(app: Client) -> None:
             await _handle_new_token(client, message)
         elif pending.action == "await_admin_broadcast":
             await _handle_admin_broadcast(client, message)
+        elif pending.action == "await_main_fsub_channel":
+            await _handle_main_fsub_add(client, message)
 
     async def _handle_new_token(client: Client, message: Message) -> None:
         token = message.text.strip()
@@ -337,13 +380,20 @@ def register_main_handlers(app: Client) -> None:
             else "Send `/owner` in your bot to upload files & set channels."
         )
 
+        await notify_owner(
+            f"🤖 **New bot created**\n"
+            f"Type: {type_label}\n"
+            f"Bot: @{bot_username}\n"
+            f"Owner ID: `{user_id}`"
+        )
+
         await status_msg.edit_text(
             f"✨ **Bot Created!** — {type_label}\n\n"
-            f"🤖 @{bot_username} is now live.\n\n"
+            f"@{bot_username} is now live.\n\n"
             f"**Next step:** {next_step}",
             reply_markup=InlineKeyboardMarkup([
-                [btn(SUCCESS, "🚀 Open Bot", url=f"https://t.me/{bot_username}", icon=EMOJI_GUARD)],
-                [btn(DEFAULT, "🤖 My Bots", "mybots", icon=EMOJI_TOOLS)],
+                [btn(SUCCESS, "Open Bot", url=f"https://t.me/{bot_username}", icon=EMOJI_GUARD)],
+                [btn(DEFAULT, "My Bots",  "mybots",                            icon=EMOJI_TOOLS)],
             ]),
         )
 
@@ -360,6 +410,24 @@ def register_main_handlers(app: Client) -> None:
                 await cq.message.edit_caption(WELCOME_TEXT, reply_markup=main_menu_kb())
             except RPCError:
                 await cq.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb())
+
+        # ── main-bot fsub verify ──
+        elif data == "main_verify":
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(MainBotChannel))
+                main_channels = result.scalars().all()
+            missing = await missing_channels(client, list(main_channels), user_id) if main_channels else []
+            if missing:
+                await cq.answer("You haven't joined all required channels yet!", show_alert=True)
+                return
+            try:
+                await cq.message.edit_caption(WELCOME_TEXT, reply_markup=main_menu_kb())
+            except RPCError:
+                await cq.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb())
+
+        elif data == "noop_main":
+            await cq.answer("Use the join button above first.", show_alert=True)
+            return
 
         # ── help ──
         elif data == "help":
@@ -453,16 +521,16 @@ def register_main_handlers(app: Client) -> None:
                 await cq.message.edit_text(
                     text,
                     reply_markup=InlineKeyboardMarkup([
-                        [btn(SUCCESS, "🚀 Open Bot", url=f"https://t.me/{bot_row.bot_username}", icon=EMOJI_GUARD)],
-                        [btn(DANGER, "🗑 Delete this bot", f"rmbot:{bot_row.id}", icon=EMOJI_TRASH)],
-                        [btn(DEFAULT, "🔙 Back", "mybots", icon=EMOJI_OCTAGON)],
+                        [btn(SUCCESS, "Open Bot",    url=f"https://t.me/{bot_row.bot_username}", icon=EMOJI_GUARD)],
+                        [btn(DANGER,  "Delete Bot",  f"rmbot:{bot_row.id}",                      icon=EMOJI_TRASH)],
+                        [btn(DEFAULT, "Back",        "mybots",                                   icon=EMOJI_OCTAGON)],
                     ]),
                 )
             except RPCError:
                 await cq.message.edit_caption(text, reply_markup=InlineKeyboardMarkup([
-                    [btn(SUCCESS, "🚀 Open Bot", url=f"https://t.me/{bot_row.bot_username}", icon=EMOJI_GUARD)],
-                    [btn(DANGER, "🗑 Delete", f"rmbot:{bot_row.id}", icon=EMOJI_TRASH)],
-                    [btn(DEFAULT, "🔙 Back", "mybots", icon=EMOJI_OCTAGON)],
+                    [btn(SUCCESS, "Open Bot",   url=f"https://t.me/{bot_row.bot_username}", icon=EMOJI_GUARD)],
+                    [btn(DANGER,  "Delete Bot", f"rmbot:{bot_row.id}",                      icon=EMOJI_TRASH)],
+                    [btn(DEFAULT, "Back",       "mybots",                                   icon=EMOJI_OCTAGON)],
                 ]))
 
         # ── rmbot ──
@@ -515,6 +583,51 @@ def register_main_handlers(app: Client) -> None:
 
     # ── superadmin callbacks ──────────────────────────────────────────────────
     async def _handle_admin_callback(client: Client, cq: CallbackQuery, data: str, user_id: int) -> None:
+        # ── main-bot FSub management ──────────────────────────────────────────
+        if data == "adm:fsub":
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(MainBotChannel))
+                channels = result.scalars().all()
+
+            lines = ["😈 **Main Bot Force-Subscribe Channels**\n"]
+            rows = []
+            if not channels:
+                lines.append("No channels configured yet.")
+            for ch in channels:
+                label = ch.title or ch.username or str(ch.chat_id)
+                lines.append(f"• {label}")
+                rows.append([btn(DANGER, f"Remove {label}", f"adm:fsub_rm:{ch.id}", icon=EMOJI_TRASH)])
+            rows.append([btn(SUCCESS, "Add Channel",  "adm:fsub_add", icon=EMOJI_SPARKLE)])
+            rows.append([btn(DANGER,  "Back",         "adm:home",     icon=EMOJI_OCTAGON)])
+            try:
+                await cq.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+            except RPCError:
+                pass
+            return
+
+        if data == "adm:fsub_add":
+            main_pending[user_id] = PendingAction("await_main_fsub_channel")
+            try:
+                await cq.message.edit_text(
+                    f"{TXT_INFO} Forward a message **from the channel** you want to require,\n"
+                    "or send its **@username**.\n\n"
+                    "Make sure the main bot is an admin in that channel first.",
+                    reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "adm:fsub", icon=EMOJI_OCTAGON)]]),
+                )
+            except RPCError:
+                pass
+            return
+
+        if data.startswith("adm:fsub_rm:"):
+            ch_id = int(data.split(":")[2])
+            async with AsyncSessionLocal() as session:
+                ch = await session.get(MainBotChannel, ch_id)
+                if ch:
+                    await session.delete(ch)
+                    await session.commit()
+            await _handle_admin_callback(client, cq, "adm:fsub", user_id)
+            return
+
         if data == "adm:stats":
             async with AsyncSessionLocal() as session:
                 total_owners = await session.scalar(select(func.count()).select_from(Owner))
@@ -644,6 +757,57 @@ def register_main_handlers(app: Client) -> None:
                 )
             except RPCError:
                 pass
+
+    async def _handle_main_fsub_add(client: Client, message: Message) -> None:
+        """Add a force-subscribe channel to the main bot (triggered from text_router)."""
+        from pyrogram.errors import UsernameNotOccupied, PeerIdInvalid
+        from pyrogram.enums import ChatType
+
+        chat = None
+        if message.forward_from_chat:
+            chat = message.forward_from_chat
+        elif message.text:
+            username = message.text.strip().lstrip("@")
+            try:
+                chat = await client.get_chat(username)
+            except (UsernameNotOccupied, PeerIdInvalid, RPCError):
+                await message.reply_text(f"{TXT_ERR} Couldn't find that channel. Check the @username and try again.")
+                return
+
+        if chat is None:
+            await message.reply_text(f"{TXT_ERR} Please forward a message from the channel or send its @username.")
+            return
+
+        try:
+            member = await client.get_chat_member(chat.id, "me")
+        except RPCError:
+            await message.reply_text(f"{TXT_ERR} The main bot must be an **admin** of that channel first.")
+            return
+        if member.status.name not in ("ADMINISTRATOR", "OWNER"):
+            await message.reply_text(f"{TXT_ERR} The main bot must be an **admin** of that channel first.")
+            return
+
+        async with AsyncSessionLocal() as session:
+            existing = await session.execute(
+                select(MainBotChannel).where(MainBotChannel.chat_id == chat.id)
+            )
+            if existing.scalar_one_or_none():
+                await message.reply_text(f"{TXT_WARN} That channel is already in the list.")
+                main_pending.pop(message.from_user.id, None)
+                return
+            session.add(MainBotChannel(
+                chat_id=chat.id,
+                username=getattr(chat, "username", None),
+                title=getattr(chat, "title", None),
+            ))
+            await session.commit()
+
+        main_pending.pop(message.from_user.id, None)
+        await message.reply_text(
+            f"✅ **{getattr(chat, 'title', chat.id)}** added to main-bot FSub channels.\n\n"
+            "New users must join before they can use the bot.",
+            reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Back to FSub", "adm:fsub", icon=EMOJI_OCTAGON)]]),
+        )
 
     async def _handle_admin_broadcast(client: Client, message: Message) -> None:
         """Broadcast a message to every CloneUser across all bots."""

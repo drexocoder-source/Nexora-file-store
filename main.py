@@ -56,6 +56,9 @@ async def main() -> None:
     me = await main_app.get_me()
     log.info("Nexora File Store main bot started as @%s", me.username)
 
+    from utils.notify import set_main_client
+    set_main_client(main_app)
+
     await start_existing_clones()
     log.info("All systems running. Listening for updates...")
 
