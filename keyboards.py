@@ -114,7 +114,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [btn(PRIMARY, "Create Bot",      "newbot",  icon=EMOJI_SPARKLE)],
         [
-            btn(DEFAULT, "My Bots",      "mybots",  icon=EMOJI_GUARD),
+            btn(DEFAULT, "My Bots",      "mybots",  icon=EMOJI_STAR),
             btn(DEFAULT, "Help",         "help",    icon=EMOJI_TOOLS),
         ],
         [btn(DEFAULT, "Platform Stats",  "stats",   icon=EMOJI_CHART)],
