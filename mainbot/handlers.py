@@ -809,38 +809,123 @@ def register_main_handlers(app: Client) -> None:
             reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Back to FSub", "adm:fsub", icon=EMOJI_OCTAGON)]]),
         )
 
-    async def _handle_admin_broadcast(client: Client, message: Message) -> None:
-        """Broadcast a message to every CloneUser across all bots."""
-        main_pending.pop(message.from_user.id, None)
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(CloneUser.user_id).distinct())
-            user_ids = [row[0] for row in result.all()]
+    async def _copy_admin_broadcast(clone: Client, uid: int, message: Message, media_path: str | None) -> None:
+        """Deliver one broadcast message via a CLONE bot's own client.
 
-        total = len(user_ids)
-        progress = await message.reply_text(f"📣 Broadcasting to {total} users…\n\n░░░░░░░░░░")
-        success = failed = blocked = 0
+        File IDs from Telegram's Bot API are not portable between different
+        bot tokens, so media can't just be `.copy()`-ed across bots the way
+        it can within a single bot. Instead the media was already downloaded
+        once (via the main bot) and is re-uploaded here through the clone.
+        """
+        caption = message.caption or None
+        if media_path is None:
+            await clone.send_message(uid, message.text or "")
+            return
+        if message.photo:
+            await clone.send_photo(uid, media_path, caption=caption)
+        elif message.video:
+            await clone.send_video(uid, media_path, caption=caption)
+        elif message.animation:
+            await clone.send_animation(uid, media_path, caption=caption)
+        elif message.audio:
+            await clone.send_audio(uid, media_path, caption=caption)
+        elif message.voice:
+            await clone.send_voice(uid, media_path, caption=caption)
+        elif message.sticker:
+            await clone.send_sticker(uid, media_path)
+        else:
+            await clone.send_document(uid, media_path, caption=caption)
+
+    async def _handle_admin_broadcast(client: Client, message: Message) -> None:
+        """Broadcast a message to every user across every clone bot.
+
+        Each clone bot only has permission to message people who have
+        started *that* clone — the main bot's client can't reach them.
+        So instead of sending everything through the main bot's client
+        (which silently failed for anyone who never started the main
+        bot), this groups users by which clone bot they belong to and
+        delivers through that clone's own running `Client`.
+        """
+        main_pending.pop(message.from_user.id, None)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(CloneUser.bot_id, CloneUser.user_id))
+            rows = result.all()
+
+        from collections import defaultdict
+
+        users_by_bot: dict[int, list[int]] = defaultdict(list)
+        for bot_id, uid in rows:
+            users_by_bot[bot_id].append(uid)
+
+        total = sum(len(v) for v in users_by_bot.values())
+        if total == 0:
+            await message.reply_text(f"{TXT_WARN} No users found across any bot yet.")
+            return
+
+        progress = await message.reply_text(
+            f"📣 Broadcasting to {total} users across {len(users_by_bot)} bot(s)…\n\n░░░░░░░░░░"
+        )
+
+        # Media file_ids aren't portable across different bot tokens, so
+        # download once via the main bot and re-upload through each clone.
+        media_path: str | None = None
+        if message.media:
+            try:
+                media_path = await message.download()
+            except RPCError:
+                media_path = None
 
         from pyrogram.errors import UserIsBlocked
 
-        for idx, uid in enumerate(user_ids, start=1):
-            try:
-                await message.copy(uid)
-                success += 1
-            except UserIsBlocked:
-                blocked += 1
-            except RPCError:
-                failed += 1
-            if idx % max(1, total // 10) == 0 or idx == total:
-                filled = int((idx / total) * 10) if total else 10
-                bar = "█" * filled + "░" * (10 - filled)
+        success = failed = blocked = offline = 0
+        bots_reached = 0
+        done = 0
+
+        for bot_id, user_ids in users_by_bot.items():
+            clone = manager.get(bot_id)
+            if clone is None:
+                offline += len(user_ids)
+                done += len(user_ids)
+                continue
+            bots_reached += 1
+
+            for uid in user_ids:
                 try:
-                    await progress.edit_text(f"📣 Broadcasting…\n\n{bar}\n{idx}/{total}")
+                    await _copy_admin_broadcast(clone, uid, message, media_path)
+                    success += 1
+                except UserIsBlocked:
+                    blocked += 1
                 except RPCError:
-                    pass
+                    failed += 1
+
+                done += 1
+                if done % max(1, total // 10) == 0 or done == total:
+                    filled = int((done / total) * 10)
+                    bar = "█" * filled + "░" * (10 - filled)
+                    try:
+                        await progress.edit_text(f"📣 Broadcasting…\n\n{bar}\n{done}/{total}")
+                    except RPCError:
+                        pass
+
+        if media_path:
+            import contextlib
+            import os
+
+            with contextlib.suppress(OSError):
+                os.remove(media_path)
 
         await progress.edit_text(
             f"✅ **Broadcast Complete**\n\n"
+            f"📡 Bots reached: **{bots_reached}/{len(users_by_bot)}**\n"
             f"✔️ Success: **{success}**\n"
             f"❌ Failed: **{failed}**\n"
-            f"🚫 Blocked: **{blocked}**"
+            f"🚫 Blocked: **{blocked}**\n"
+            f"⏸️ Skipped (bot offline): **{offline}**"
+        )
+        await _log_main(
+            client,
+            f"📣 **Superadmin Broadcast Finished**\n"
+            f"Bots reached: {bots_reached}/{len(users_by_bot)}\n"
+            f"✔️ {success}  ❌ {failed}  🚫 {blocked}  ⏸️ {offline}",
         )
