@@ -4,9 +4,10 @@
 constructed. `app.bot_db_id` is set beforehand so every handler knows which
 `bots` row it belongs to.
 
-Supports two bot types:
+Supports three bot types:
   • filestore    — store & share files with users
   • linkprotect  — protect URLs behind a force-subscribe gate
+  • cricket      — tournament player/captain registration
 """
 from __future__ import annotations
 
@@ -36,8 +37,17 @@ from keyboards import (
     EMOJI_FIRE, EMOJI_FOLDER, EMOJI_GLOBE, EMOJI_GUARD, EMOJI_LINK,
     EMOJI_LOCK, EMOJI_MIC, EMOJI_OCTAGON, EMOJI_PHONE, EMOJI_SIREN,
     EMOJI_SPARKLE, EMOJI_STAR, EMOJI_STOP, EMOJI_TOOLS, EMOJI_TRASH,
+    EMOJI_TROPHY,
     IMG_CLONE, TXT_ERR, TXT_INFO, TXT_OK, TXT_WARN,
     back_kb, btn, quote, yes_no_kb,
+    cricket_owner_panel_kb,
+)
+from templates.cricket.handlers import (
+    handle_cricket_start,
+    dispatch_cricket_owner_action,
+    handle_cricket_wizard_message,
+    handle_cricket_owner_message,
+    register_cricket_handlers,
 )
 from utils.fsub import missing_channels
 from utils.notify import notify_owner
@@ -115,6 +125,8 @@ async def _is_owner(bot_id: int, user_id: int) -> bool:
 
 # ── Owner panel keyboards ─────────────────────────────────────────────────────
 def owner_panel_kb(bot_type: str = "filestore") -> InlineKeyboardMarkup:
+    if bot_type == "cricket":
+        return cricket_owner_panel_kb()
     if bot_type == "linkprotect":
         return InlineKeyboardMarkup([
             [
@@ -160,6 +172,9 @@ def owner_panel_kb(bot_type: str = "filestore") -> InlineKeyboardMarkup:
 # ── Main registration ─────────────────────────────────────────────────────────
 def register_clone_handlers(app: Client) -> None:
     bot_id: int = app.bot_db_id  # type: ignore[attr-defined]
+
+    # Register cricket-specific callback and intake handlers
+    register_cricket_handlers(app, bot_id)
 
     # ── /start ────────────────────────────────────────────────────────────────
     @app.on_message(filters.command("start") & filters.private)
@@ -241,8 +256,14 @@ def register_clone_handlers(app: Client) -> None:
                 )
             return
 
-        if bot_type == "linkprotect":
-            # For link protect: if a payload token is given, deliver that link
+        if bot_type == "cricket":
+            async with AsyncSessionLocal() as session:
+                full_bot = await _get_bot(session, bot_id)
+            await handle_cricket_start(
+                client, message, bot_id, full_bot,
+                is_owner=is_bot_owner, first_time=first_time,
+            )
+        elif bot_type == "linkprotect":
             await _handle_linkprotect_start(client, message, bot_id, payload, settings_row, bot_row, first_time)
         else:
             greeting = (
@@ -388,7 +409,18 @@ def register_clone_handlers(app: Client) -> None:
         )
 
         protect = settings_row.protect_content if settings_row else False
-        if bot_type == "linkprotect":
+        if bot_type == "cricket":
+            async with AsyncSessionLocal() as session:
+                full_bot = await _get_bot(session, bot_id)
+            await cq.message.edit_text(
+                f"✅ Verified! Welcome to **{bot_row.bot_name or bot_row.bot_username}** 🏏\n\n"
+                "You can now register for the tournament."
+            )
+            await handle_cricket_start(
+                client, cq.message, bot_id, full_bot,
+                is_owner=False, first_time=False,
+            )
+        elif bot_type == "linkprotect":
             await cq.message.edit_text(
                 f"✅ Verified! Welcome to **{bot_row.bot_name or bot_row.bot_username}**\n\n"
                 "🔗 You can now access all protected links."
@@ -398,7 +430,6 @@ def register_clone_handlers(app: Client) -> None:
                 f"✅ Verified! Welcome to **{bot_row.bot_name or bot_row.bot_username}**\n\nHere are your files."
             )
             await _deliver(client, cq.message.chat.id, bot_id, payload, protect)
-        await cq.answer("✅ Access granted!")
 
     @app.on_callback_query(filters.regex(r"^noop$"))
     async def noop_cb(client: Client, cq: CallbackQuery) -> None:
@@ -412,7 +443,11 @@ def register_clone_handlers(app: Client) -> None:
         async with AsyncSessionLocal() as session:
             bot_row = await session.get(BotModel, bot_id)
             bot_type = bot_row.bot_type if bot_row else "filestore"
-        type_label = "🔗 Link Protect" if bot_type == "linkprotect" else "📁 File Store"
+        type_label_map = {
+            "linkprotect": "🔗 Link Protect",
+            "cricket":     "🏏 Cricket Tournament",
+        }
+        type_label = type_label_map.get(bot_type, "📁 File Store")
         await message.reply_text(
             f"💂 **Owner Panel**\n\n{type_label}",
             reply_markup=owner_panel_kb(bot_type),
@@ -449,8 +484,38 @@ def register_clone_handlers(app: Client) -> None:
                 f"{TXT_INFO} 📣 Send (or forward) the message you want to broadcast to all users."
             )
 
+    # ── /start_tour shortcut for cricket bots ─────────────────────────────────
+    @app.on_message(filters.command("start_tour") & filters.private)
+    async def start_tour_cmd(client: Client, message: Message) -> None:
+        if not await _is_owner(bot_id, message.from_user.id):
+            return
+        async with AsyncSessionLocal() as session:
+            bot_row = await session.get(BotModel, bot_id)
+            if bot_row and bot_row.bot_type == "cricket":
+                from templates.cricket.handlers import _start_tour_wizard
+                await _start_tour_wizard(client, message.from_user.id, message, bot_id)
+
+    # ── /players shortcut for cricket bots ───────────────────────────────────
+    @app.on_message(filters.command("players") & filters.private)
+    async def players_cmd(client: Client, message: Message) -> None:
+        if not await _is_owner(bot_id, message.from_user.id):
+            return
+        await _dispatch_owner_action(client, message.from_user.id, message, "own:crik:players")
+
+    # ── /pending shortcut for cricket bots ───────────────────────────────────
+    @app.on_message(filters.command("pending") & filters.private)
+    async def pending_cmd(client: Client, message: Message) -> None:
+        if not await _is_owner(bot_id, message.from_user.id):
+            return
+        await _dispatch_owner_action(client, message.from_user.id, message, "own:crik:pending")
+
     # ── owner action dispatcher ───────────────────────────────────────────────
     async def _dispatch_owner_action(client: Client, user_id: int, target: Message, action: str) -> None:
+
+        # ── cricket owner panel ──
+        if action.startswith("own:crik:"):
+            await dispatch_cricket_owner_action(client, user_id, target, action, bot_id)
+            return
 
         # ── get bot type ──
         async with AsyncSessionLocal() as session:
@@ -727,14 +792,34 @@ def register_clone_handlers(app: Client) -> None:
         await _dispatch_owner_action(client, cq.from_user.id, cq.message, cq.data)
         await cq.answer()
 
-    # ── owner text/media intake ───────────────────────────────────────────────
+    # ── owner & player text/media intake ─────────────────────────────────────
     @app.on_message(
         filters.private & (filters.text | MEDIA_FILTER)
-        & ~filters.command(["start", "owner", "stats", "files", "channels", "settings", "logs", "backup", "broadcast", "links"])
+        & ~filters.command([
+            "start", "owner", "stats", "files", "channels", "settings",
+            "logs", "backup", "broadcast", "links", "start_tour", "players", "pending",
+        ])
     )
-    async def owner_intake(client: Client, message: Message) -> None:
-        pending = clone_pending.get((bot_id, message.from_user.id))
-        if not pending or not await _is_owner(bot_id, message.from_user.id):
+    async def intake(client: Client, message: Message) -> None:
+        user_id = message.from_user.id
+        pending = clone_pending.get((bot_id, user_id))
+        if not pending:
+            return
+
+        # ── Cricket wizard steps (any user) ───────────────────────────────────
+        if pending.action in ("crik_wizard", "crik_confirm") and \
+                pending.data.get("step") in ("base_price", "question"):
+            await handle_cricket_wizard_message(client, message, bot_id, user_id, pending)
+            return
+
+        # ── Cricket owner wizard states ───────────────────────────────────────
+        if pending.action in ("crik_newtour", "crik_qadd", "crik_setmax"):
+            if await _is_owner(bot_id, user_id):
+                await handle_cricket_owner_message(client, message, bot_id, user_id, pending)
+            return
+
+        # ── Owner-only states ─────────────────────────────────────────────────
+        if not await _is_owner(bot_id, user_id):
             return
 
         if pending.action == "await_channel" and (message.forward_from_chat or message.text):
@@ -742,8 +827,8 @@ def register_clone_handlers(app: Client) -> None:
         elif pending.action == "await_upload" and _media_kind(message):
             await _handle_upload(message, pending)
         elif pending.action == "await_broadcast":
-            clone_pending.pop((bot_id, message.from_user.id), None)
-            await _run_broadcast(client, message.from_user.id, message, message)
+            clone_pending.pop((bot_id, user_id), None)
+            await _run_broadcast(client, user_id, message, message)
         elif pending.action == "await_log_channel" and message.forward_from_chat:
             await _handle_set_log_channel(client, message)
         elif pending.action == "await_link_url" and message.text:

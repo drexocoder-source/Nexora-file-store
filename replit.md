@@ -16,6 +16,14 @@ python main.py       # starts the main bot + all registered clone bots
 python app.py        # starts the Flask log dashboard (port 5000)
 ```
 
+## Templates
+
+| Template | bot_type | Key commands |
+|---|---|---|
+| File Store | `filestore` | /owner /files /channels /settings /broadcast /backup |
+| Link Protect | `linkprotect` | /owner /links /channels /settings /broadcast /backup |
+| Cricket Tournament | `cricket` | /owner /start_tour /players /pending /stats /logs /settings |
+
 ## Required secrets (Replit Secrets)
 
 | Variable | Description |

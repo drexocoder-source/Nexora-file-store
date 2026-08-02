@@ -1,0 +1,1 @@
+- [Cricket template architecture](cricket-template.md) — cricket handlers live in templates/cricket/; clonebot/handlers.py routes to them; dispatch pattern for own:crik:* callbacks.

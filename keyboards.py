@@ -26,8 +26,6 @@ RED    = DANGER
 YELLOW = DEFAULT
 
 # ── Premium custom emoji IDs ─────────────────────────────────────────────────
-# Each constant stores the Telegram custom-emoji ID supplied by the owner.
-# Buttons show ONLY the premium icon; plain text labels carry no extra emoji.
 EMOJI_DEVIL   = "5332696592317160796"   # 😈
 EMOJI_STOP    = "5283283384418707920"   # ⛔
 EMOJI_PHONE   = "5318779098686826724"   # 📞
@@ -60,6 +58,13 @@ EMOJI_FIRE    = "5213452215527677338"   # 🔥  top / popular
 EMOJI_GLOBE   = "5215854116564648552"   # 🌐  platform-wide
 EMOJI_FOLDER  = "5218777718840180631"   # 📁  file store template
 EMOJI_TRASH   = "5215209357985613414"   # 🗑  delete
+
+# ── Cricket-specific emojis ───────────────────────────────────────────────────
+EMOJI_CRICKET  = "5188450861226117570"  # 🏏  cricket bat
+EMOJI_MEDAL    = "5219886195297809399"  # 🥇  medal / rank
+EMOJI_CALENDAR = "5222108309795908493"  # 📅  reuses sparkle slot — update if needed
+EMOJI_HOURGLASS = "6089000948292652337" # ⏳  reuses warn slot — pending
+EMOJI_USERS    = "5215854116564648552"  # 👥  reuses globe slot
 
 
 def btn(
@@ -158,7 +163,31 @@ def yes_no_kb(yes_cb: str, no_cb: str) -> InlineKeyboardMarkup:
 def template_kb() -> InlineKeyboardMarkup:
     """Shown after token validation — user picks bot type."""
     return InlineKeyboardMarkup([
-        [btn(PRIMARY, "File Store",    "tpl:filestore",   icon=EMOJI_FOLDER)],
-        [btn(SUCCESS, "Link Protect",  "tpl:linkprotect", icon=EMOJI_LINK)],
-        [btn(DANGER,  "Cancel",        "home",            icon=EMOJI_OCTAGON)],
+        [btn(PRIMARY, "📁 File Store",         "tpl:filestore",   icon=EMOJI_FOLDER)],
+        [btn(SUCCESS, "🔗 Link Protect",       "tpl:linkprotect", icon=EMOJI_LINK)],
+        [btn(YELLOW,  "🏏 Cricket Tournament", "tpl:cricket",     icon=EMOJI_TROPHY)],
+        [btn(DANGER,  "Cancel",                "home",            icon=EMOJI_OCTAGON)],
+    ])
+
+
+def cricket_owner_panel_kb() -> InlineKeyboardMarkup:
+    """Owner panel keyboard for cricket bots."""
+    return InlineKeyboardMarkup([
+        [
+            btn(PRIMARY, "🏆 Tours",     "own:crik:tours",    icon=EMOJI_TROPHY),
+            btn(PRIMARY, "👥 Players",   "own:crik:players",  icon=EMOJI_GUARD),
+        ],
+        [
+            btn(YELLOW,  "⏳ Pending",   "own:crik:pending",  icon=EMOJI_BELL),
+            btn(YELLOW,  "👑 Captains",  "own:crik:captains", icon=EMOJI_CROWN),
+        ],
+        [
+            btn(BLUE,    "🎯 Questions", "own:crik:questions",icon=EMOJI_SPARKLE),
+            btn(BLUE,    "⚙️ Settings",  "own:crik:settings", icon=EMOJI_TOOLS),
+        ],
+        [
+            btn(GREEN,   "📊 Stats",     "own:crik:stats",    icon=EMOJI_CHART),
+            btn(GREEN,   "🚨 Logs",      "own:crik:logs",     icon=EMOJI_SIREN),
+        ],
+        [btn(RED,    "❌ Close",         "own:close",         icon=EMOJI_OCTAGON)],
     ])

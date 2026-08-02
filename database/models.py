@@ -62,6 +62,19 @@ class Bot(Base):
     protected_links: Mapped[list["ProtectedLink"]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
     )
+    # Cricket
+    cricket_tours: Mapped[list["CricketTour"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    cricket_players: Mapped[list["CricketPlayer"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    cricket_questions: Mapped[list["CricketQuestion"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    cricket_settings: Mapped["CricketSettings"] = relationship(
+        back_populates="bot", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class BotChannel(Base):
@@ -196,3 +209,77 @@ class MainBotChannel(Base):
     username: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)
     required: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+# ── Cricket Tournament Models ─────────────────────────────────────────────────
+
+class CricketTour(Base):
+    """A tournament created by a cricket bot owner."""
+    __tablename__ = "cricket_tours"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(255))
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prize_pool: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    bot: Mapped["Bot"] = relationship(back_populates="cricket_tours")
+    players: Mapped[list["CricketPlayer"]] = relationship(
+        back_populates="tour", cascade="all, delete-orphan"
+    )
+
+
+class CricketPlayer(Base):
+    """A registered player / captain in a cricket tournament."""
+    __tablename__ = "cricket_players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    tour_id: Mapped[int | None] = mapped_column(ForeignKey("cricket_tours.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_captain: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_price: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # status: pending | approved | rejected | waitlisted | deregistered
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    answers: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    registered_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    bot: Mapped["Bot"] = relationship(back_populates="cricket_players")
+    tour: Mapped["CricketTour | None"] = relationship(back_populates="players")
+
+
+class CricketQuestion(Base):
+    """Owner-configurable additional registration questions."""
+    __tablename__ = "cricket_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(256))
+    # input_type: text | choice | number
+    input_type: Mapped[str] = mapped_column(String(16), default="text")
+    choices: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    required: Mapped[bool] = mapped_column(Boolean, default=False)
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+
+    bot: Mapped["Bot"] = relationship(back_populates="cricket_questions")
+
+
+class CricketSettings(Base):
+    """Per-bot cricket settings."""
+    __tablename__ = "cricket_settings"
+
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), primary_key=True)
+    auto_approve: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_captain_reg: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_players: Mapped[int] = mapped_column(Integer, default=0)   # 0 = unlimited
+    max_captains: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
+    reg_end_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    bot: Mapped["Bot"] = relationship(back_populates="cricket_settings")

@@ -8,7 +8,7 @@ import logging
 
 from pyrogram import Client, filters
 from pyrogram.errors import RPCError
-from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from pyrogram.types import BotCommand, CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 
 from bot_manager import manager
@@ -16,13 +16,13 @@ from clonebot.handlers import register_clone_handlers
 from config import settings
 from database.engine import AsyncSessionLocal
 from database.models import Bot as BotModel
-from database.models import BotSettings, CloneUser, MainBotChannel, Owner
+from database.models import BotSettings, CloneUser, CricketPlayer, MainBotChannel, Owner
 from keyboards import (
     BLUE, DANGER, DEFAULT, GREEN, PRIMARY, RED, SUCCESS, YELLOW,
     EMOJI_BELL, EMOJI_CHART, EMOJI_CHECK, EMOJI_CROWN, EMOJI_DEVIL,
     EMOJI_FIRE, EMOJI_FLAG_IN, EMOJI_FOLDER, EMOJI_GLOBE, EMOJI_GUARD,
     EMOJI_LINK, EMOJI_MIC, EMOJI_OCTAGON, EMOJI_PHONE, EMOJI_SIREN,
-    EMOJI_SPARKLE, EMOJI_STOP, EMOJI_TOOLS, EMOJI_TRASH, EMOJI_X,
+    EMOJI_SPARKLE, EMOJI_STOP, EMOJI_TOOLS, EMOJI_TRASH, EMOJI_TROPHY, EMOJI_X,
     IMG_ADMIN, IMG_CLONE, IMG_WELCOME,
     SUPPORT_URL,
     TXT_ERR, TXT_INFO, TXT_OK, TXT_WARN,
@@ -38,7 +38,7 @@ log = logging.getLogger("nexora.mainbot")
 # ── Text constants ────────────────────────────────────────────────────────────
 WELCOME_TEXT = (
     "🇮🇳 **Nexora File Store**\n\n"
-    "Create your own Telegram File Store Bot.\n"
+    "Create your own Telegram Bot.\n"
     "No coding. No limits.\n\n"
     "📁 Unlimited Files\n"
     "😈 Force Subscribe\n"
@@ -47,6 +47,7 @@ WELCOME_TEXT = (
     "📊 Statistics\n"
     "💂 Owner Panel\n"
     "🔗 Link Protect\n"
+    "🏏 Cricket Tournament\n"
     "👑 Superadmin Access"
 )
 
@@ -59,11 +60,64 @@ HELP_TEXT = (
     "**Step 3**\n"
     "Pick a template:\n"
     "• 📁 **File Store** — store & share files\n"
-    "• 🔗 **Link Protect** — protect links behind a gate\n\n"
+    "• 🔗 **Link Protect** — protect links behind a gate\n"
+    "• 🏏 **Cricket Tournament** — player & captain registration,\n"
+    "   tours, admin approvals, and waitlisting\n\n"
     "Done — your bot is live instantly."
 )
 
 SUPPORT_TEXT = f"📞 Need help? Reach out to Nexora Support:\n\n{SUPPORT_URL}"
+
+TYPE_LABELS = {
+    "linkprotect": "🔗 Link Protect",
+    "cricket":     "🏏 Cricket Tournament",
+    "filestore":   "📁 File Store",
+}
+
+CRICKET_COMMANDS = [
+    BotCommand("start",     "Start / Register for tournament"),
+    BotCommand("owner",     "Owner panel"),
+    BotCommand("start_tour","Start a new tournament"),
+    BotCommand("players",   "View registered players"),
+    BotCommand("pending",   "View pending approvals"),
+    BotCommand("stats",     "Tournament statistics"),
+    BotCommand("logs",      "Activity logs"),
+    BotCommand("settings",  "Bot settings"),
+    BotCommand("broadcast", "Broadcast to all users"),
+    BotCommand("channels",  "Force-subscribe channels"),
+]
+
+FILESTORE_COMMANDS = [
+    BotCommand("start",     "Welcome / get files"),
+    BotCommand("owner",     "Owner panel"),
+    BotCommand("files",     "Manage stored files"),
+    BotCommand("channels",  "Force-subscribe channels"),
+    BotCommand("stats",     "Statistics"),
+    BotCommand("settings",  "Bot settings"),
+    BotCommand("broadcast", "Broadcast to all users"),
+    BotCommand("logs",      "Set log channel"),
+    BotCommand("backup",    "Export data backup"),
+]
+
+LINKPROTECT_COMMANDS = [
+    BotCommand("start",     "Welcome / access links"),
+    BotCommand("owner",     "Owner panel"),
+    BotCommand("links",     "Manage protected links"),
+    BotCommand("channels",  "Force-subscribe channels"),
+    BotCommand("stats",     "Statistics"),
+    BotCommand("settings",  "Bot settings"),
+    BotCommand("broadcast", "Broadcast to all users"),
+    BotCommand("logs",      "Set log channel"),
+    BotCommand("backup",    "Export data backup"),
+]
+
+BOT_DESCRIPTIONS = {
+    "filestore":   "Store and share files with force-subscribe protection.",
+    "linkprotect": "Access protected links gated behind channel membership.",
+    "cricket":     "Register players and manage cricket tournaments with ease.",
+}
+
+BOT_ABOUT = "Powered by Nexora · {main_username}"
 
 
 def _is_main_owner(user_id: int) -> bool:
@@ -87,6 +141,34 @@ async def _get_or_create_owner(session, user) -> Owner:
         session.add(owner)
         await session.flush()
     return owner
+
+
+async def _configure_clone_bot_profile(clone_client: Client, bot_type: str, main_username: str) -> None:
+    """Auto-set commands, description, and about text on a newly created clone bot."""
+    commands_map = {
+        "filestore":   FILESTORE_COMMANDS,
+        "linkprotect": LINKPROTECT_COMMANDS,
+        "cricket":     CRICKET_COMMANDS,
+    }
+    commands = commands_map.get(bot_type, FILESTORE_COMMANDS)
+    description = BOT_DESCRIPTIONS.get(bot_type, "")
+    about = BOT_ABOUT.format(main_username=f"@{main_username}")
+
+    try:
+        await clone_client.set_bot_commands(commands)
+        log.info("Auto-set commands for %s clone", bot_type)
+    except Exception:
+        log.warning("Could not set commands for clone (non-fatal)", exc_info=True)
+
+    try:
+        await clone_client.set_bot_description(description)
+    except Exception:
+        log.warning("Could not set description for clone (non-fatal)", exc_info=True)
+
+    try:
+        await clone_client.set_bot_short_description(about)
+    except Exception:
+        log.warning("Could not set short description for clone (non-fatal)", exc_info=True)
 
 
 def register_main_handlers(app: Client) -> None:
@@ -191,7 +273,7 @@ def register_main_handlers(app: Client) -> None:
             )
 
     # ── helpers ───────────────────────────────────────────────────────────────
-    async def _send_mybots(client: Client, user_id: int, target: Message) -> None:
+    async def _send_mybots(client: Client, user_id: int, target) -> None:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(BotModel).join(Owner).where(Owner.telegram_id == user_id)
@@ -199,24 +281,39 @@ def register_main_handlers(app: Client) -> None:
             bots = result.scalars().all()
 
         if not bots:
-            await target.reply_text(
-                f"{TXT_WARN} You haven't created any bots yet. Use /newbot to get started.",
-                reply_markup=back_kb(),
-            )
+            try:
+                await target.edit_text(
+                    f"{TXT_WARN} You haven't created any bots yet. Use /newbot to get started.",
+                    reply_markup=back_kb(),
+                )
+            except RPCError:
+                await target.reply_text(
+                    f"{TXT_WARN} You haven't created any bots yet. Use /newbot to get started.",
+                    reply_markup=back_kb(),
+                )
             return
 
+        icon_map = {
+            "linkprotect": EMOJI_LINK,
+            "cricket":     EMOJI_TROPHY,
+            "filestore":   EMOJI_FOLDER,
+        }
         rows = []
         for b in bots:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
-            icon_map = {"linkprotect": EMOJI_LINK, "filestore": EMOJI_FOLDER}
             icon = icon_map.get(b.bot_type or "filestore", EMOJI_FOLDER)
             rows.append([btn(SUCCESS, label, f"openpanel:{b.id}", icon=icon)])
         rows.append([btn(DANGER, "Back", "home", icon=EMOJI_OCTAGON)])
-        await target.reply_text(
-            f"💂 **Your Bots** ({len(bots)} total)", reply_markup=InlineKeyboardMarkup(rows)
-        )
+        try:
+            await target.edit_text(
+                f"💂 **Your Bots** ({len(bots)} total)", reply_markup=InlineKeyboardMarkup(rows)
+            )
+        except RPCError:
+            await target.reply_text(
+                f"💂 **Your Bots** ({len(bots)} total)", reply_markup=InlineKeyboardMarkup(rows)
+            )
 
-    async def _send_rmbot_list(client: Client, user_id: int, target: Message) -> None:
+    async def _send_rmbot_list(client: Client, user_id: int, target) -> None:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(BotModel).join(Owner).where(Owner.telegram_id == user_id)
@@ -224,7 +321,10 @@ def register_main_handlers(app: Client) -> None:
             bots = result.scalars().all()
 
         if not bots:
-            await target.reply_text(f"{TXT_WARN} You have no bots to remove.", reply_markup=back_kb())
+            try:
+                await target.edit_text(f"{TXT_WARN} You have no bots to remove.", reply_markup=back_kb())
+            except RPCError:
+                await target.reply_text(f"{TXT_WARN} You have no bots to remove.", reply_markup=back_kb())
             return
 
         rows = []
@@ -232,9 +332,14 @@ def register_main_handlers(app: Client) -> None:
             label = f"@{b.bot_username}" if b.bot_username else (b.bot_name or f"Bot #{b.id}")
             rows.append([btn(DANGER, f"Delete {label}", f"rmbot:{b.id}", icon=EMOJI_TRASH)])
         rows.append([btn(PRIMARY, "Back", "home", icon=EMOJI_OCTAGON)])
-        await target.reply_text(
-            "⛔ **Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows)
-        )
+        try:
+            await target.edit_text(
+                "⛔ **Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows)
+            )
+        except RPCError:
+            await target.reply_text(
+                "⛔ **Select a bot to remove**", reply_markup=InlineKeyboardMarkup(rows)
+            )
 
     # ── text router ───────────────────────────────────────────────────────────
     @app.on_message(
@@ -295,7 +400,6 @@ def register_main_handlers(app: Client) -> None:
                 )
                 return
 
-        # Store token + bot info in pending, then ask for template
         main_pending[message.from_user.id] = PendingAction("await_template", {
             "token": token,
             "username": me.username,
@@ -304,30 +408,25 @@ def register_main_handlers(app: Client) -> None:
 
         await status_msg.edit_text(
             f"✅ **Bot verified:** @{me.username}\n\n"
-            "🎨 **Choose a template** for this bot:\n\n"
+            "🎨 **Choose a template:**\n\n"
             "📁 **File Store** — store & share files with users\n"
-            "🔗 **Link Protect** — protect URLs behind force-subscribe gate",
+            "🔗 **Link Protect** — protect URLs behind force-subscribe gate\n"
+            "🏏 **Cricket Tournament** — player registration, tours, admin approvals",
             reply_markup=template_kb(),
         )
 
-    async def _create_bot(client: Client, user_id: int, token: str, bot_username: str,
-                          bot_name: str, bot_type: str, status_msg: Message) -> None:
+    async def _create_bot(
+        client: Client, user_id: int, token: str, bot_username: str,
+        bot_name: str, bot_type: str, status_msg: Message,
+    ) -> None:
         """Create the bot record, start the clone, and report back."""
         async with AsyncSessionLocal() as session:
-            # re-check for duplicates (race)
             existing = await session.execute(select(BotModel).where(BotModel.bot_token == token))
             if existing.scalar_one_or_none() is not None:
                 await status_msg.edit_text(
                     f"{TXT_ERR} This bot is already registered.", reply_markup=back_kb()
                 )
                 return
-
-            from pyrogram.types import User as TgUser
-            # get the real User object for owner creation
-            class _FakeUser:
-                id = user_id
-                username = None
-                first_name = None
 
             async with AsyncSessionLocal() as s2:
                 res = await s2.execute(select(Owner).where(Owner.telegram_id == user_id))
@@ -351,34 +450,48 @@ def register_main_handlers(app: Client) -> None:
             await session.flush()
             session.add(BotSettings(bot_id=bot_row.id))
             await session.commit()
-            bot_id = bot_row.id
+            new_bot_id = bot_row.id
+
+        # Seed cricket questions if cricket template
+        if bot_type == "cricket":
+            from templates.cricket.handlers import seed_default_questions
+            await seed_default_questions(new_bot_id)
 
         main_pending.pop(user_id, None)
 
         try:
-            await manager.start_clone(bot_id, token, register_clone_handlers)
+            clone_client = await manager.start_clone(new_bot_id, token, register_clone_handlers)
         except Exception:
-            log.exception("Failed to start clone bot %s", bot_id)
+            log.exception("Failed to start clone bot %s", new_bot_id)
             await status_msg.edit_text(
                 f"{TXT_ERR} Bot saved but failed to start. Try /mybots later.",
                 reply_markup=back_kb(),
             )
             return
 
+        # Auto-configure commands, description, and about text
+        try:
+            me = await client.get_me()
+            main_username = me.username or "NexoraBot"
+            await _configure_clone_bot_profile(clone_client, bot_type, main_username)
+        except Exception:
+            log.warning("Auto-profile config failed (non-fatal)", exc_info=True)
+
         await _log_main(
             client,
             f"🚨 ➕ New clone created\n"
             f"Type: {bot_type}\n"
             f"Owner: {user_id}\n"
-            f"Bot: @{bot_username} (id {bot_id})",
+            f"Bot: @{bot_username} (id {new_bot_id})",
         )
 
-        type_label = "🔗 Link Protect" if bot_type == "linkprotect" else "📁 File Store"
-        next_step = (
-            "Send `/owner` in your bot to configure links."
-            if bot_type == "linkprotect"
-            else "Send `/owner` in your bot to upload files & set channels."
-        )
+        type_label = TYPE_LABELS.get(bot_type, "📁 File Store")
+        next_step_map = {
+            "linkprotect": "Send `/owner` in your bot to configure links.",
+            "cricket":     "Send `/owner` in your bot to set up your first tour and registration questions.",
+            "filestore":   "Send `/owner` in your bot to upload files & set channels.",
+        }
+        next_step = next_step_map.get(bot_type, "Send `/owner` in your bot to configure it.")
 
         await notify_owner(
             f"🤖 **New bot created**\n"
@@ -467,7 +580,7 @@ def register_main_handlers(app: Client) -> None:
             token = pending.data["token"]
             bot_username = pending.data["username"]
             bot_name = pending.data["name"]
-            type_label = "🔗 Link Protect" if bot_type == "linkprotect" else "📁 File Store"
+            type_label = TYPE_LABELS.get(bot_type, "📁 File Store")
             try:
                 await cq.message.edit_text(f"🛠 Creating **{type_label}** bot…")
             except RPCError:
@@ -490,12 +603,16 @@ def register_main_handlers(app: Client) -> None:
                 lp_bots = await session.scalar(
                     select(func.count()).select_from(BotModel).where(BotModel.bot_type == "linkprotect")
                 )
+                cr_bots = await session.scalar(
+                    select(func.count()).select_from(BotModel).where(BotModel.bot_type == "cricket")
+                )
             text = (
                 "📊 **Platform Statistics**\n\n"
                 f"👑 Owners: **{total_owners}**\n"
                 f"🤖 Total Bots: **{total_bots}**\n"
                 f"   📁 File Store: **{fs_bots}**\n"
                 f"   🔗 Link Protect: **{lp_bots}**\n"
+                f"   🏏 Cricket: **{cr_bots}**\n"
                 f"👥 Total Users: **{total_users}**"
             )
             try:
@@ -505,13 +622,13 @@ def register_main_handlers(app: Client) -> None:
 
         # ── open panel ──
         elif data.startswith("openpanel:"):
-            bot_id = int(data.split(":")[1])
+            b_id = int(data.split(":")[1])
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await session.get(BotModel, b_id)
             if bot_row is None:
                 await cq.answer("Bot not found.", show_alert=True)
                 return
-            type_label = "🔗 Link Protect" if bot_row.bot_type == "linkprotect" else "📁 File Store"
+            type_label = TYPE_LABELS.get(bot_row.bot_type or "filestore", "📁 File Store")
             text = (
                 f"💂 **@{bot_row.bot_username}**\n\n"
                 f"Type: {type_label}\n\n"
@@ -535,9 +652,9 @@ def register_main_handlers(app: Client) -> None:
 
         # ── rmbot ──
         elif data.startswith("rmbot:"):
-            bot_id = int(data.split(":")[1])
+            b_id = int(data.split(":")[1])
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await session.get(BotModel, b_id)
             if bot_row is None:
                 await cq.answer("Bot not found.", show_alert=True)
                 return
@@ -545,23 +662,23 @@ def register_main_handlers(app: Client) -> None:
             try:
                 await cq.message.edit_text(
                     f"⛔ Delete **{label}**?\n\nThis removes all its files, links, channels and users.",
-                    reply_markup=yes_no_kb(f"rmbot_yes:{bot_id}", "mybots"),
+                    reply_markup=yes_no_kb(f"rmbot_yes:{b_id}", "mybots"),
                 )
             except RPCError:
                 pass
 
         elif data.startswith("rmbot_yes:"):
-            bot_id = int(data.split(":")[1])
+            b_id = int(data.split(":")[1])
             async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, bot_id)
+                bot_row = await session.get(BotModel, b_id)
                 if bot_row is None:
                     await cq.answer("Already deleted.", show_alert=True)
                     return
                 username = bot_row.bot_username
                 await session.delete(bot_row)
                 await session.commit()
-            await manager.stop_clone(bot_id)
-            await _log_main(client, f"🚨 🗑 Clone deleted: @{username} (id {bot_id})")
+            await manager.stop_clone(b_id)
+            await _log_main(client, f"🚨 🗑 Clone deleted: @{username} (id {b_id})")
             try:
                 await cq.message.edit_text(
                     f"✅ Deleted @{username}.", reply_markup=back_kb()
@@ -583,7 +700,6 @@ def register_main_handlers(app: Client) -> None:
 
     # ── superadmin callbacks ──────────────────────────────────────────────────
     async def _handle_admin_callback(client: Client, cq: CallbackQuery, data: str, user_id: int) -> None:
-        # ── main-bot FSub management ──────────────────────────────────────────
         if data == "adm:fsub":
             async with AsyncSessionLocal() as session:
                 result = await session.execute(select(MainBotChannel))
@@ -642,12 +758,16 @@ def register_main_handlers(app: Client) -> None:
                 lp_bots = await session.scalar(
                     select(func.count()).select_from(BotModel).where(BotModel.bot_type == "linkprotect")
                 )
+                cr_bots = await session.scalar(
+                    select(func.count()).select_from(BotModel).where(BotModel.bot_type == "cricket")
+                )
             text = (
                 "📊 **Platform Statistics — Superadmin View**\n\n"
                 f"👑 Owners: **{total_owners}**\n"
                 f"🤖 Total Bots: **{total_bots}** ({active_bots} active)\n"
                 f"   📁 File Store: **{fs_bots}**\n"
                 f"   🔗 Link Protect: **{lp_bots}**\n"
+                f"   🏏 Cricket: **{cr_bots}**\n"
                 f"👥 Total Users (all bots): **{total_users}**"
             )
             try:
@@ -679,9 +799,10 @@ def register_main_handlers(app: Client) -> None:
                 except RPCError:
                     pass
                 return
+            type_icon = {"linkprotect": "🔗", "cricket": "🏏", "filestore": "📁"}
             lines = ["🤖 **All Bots** (latest 20)\n"]
             for b in bots:
-                t = "🔗" if b.bot_type == "linkprotect" else "📁"
+                t = type_icon.get(b.bot_type or "filestore", "📁")
                 lines.append(f"{t} @{b.bot_username or b.id} — owner_id:{b.owner_id}")
             try:
                 await cq.message.edit_text(
@@ -759,7 +880,6 @@ def register_main_handlers(app: Client) -> None:
                 pass
 
     async def _handle_main_fsub_add(client: Client, message: Message) -> None:
-        """Add a force-subscribe channel to the main bot (triggered from text_router)."""
         from pyrogram.errors import UsernameNotOccupied, PeerIdInvalid
         from pyrogram.enums import ChatType
 
@@ -810,13 +930,6 @@ def register_main_handlers(app: Client) -> None:
         )
 
     async def _copy_admin_broadcast(clone: Client, uid: int, message: Message, media_path: str | None) -> None:
-        """Deliver one broadcast message via a CLONE bot's own client.
-
-        File IDs from Telegram's Bot API are not portable between different
-        bot tokens, so media can't just be `.copy()`-ed across bots the way
-        it can within a single bot. Instead the media was already downloaded
-        once (via the main bot) and is re-uploaded here through the clone.
-        """
         caption = message.caption or None
         if media_path is None:
             await clone.send_message(uid, message.text or "")
@@ -837,15 +950,6 @@ def register_main_handlers(app: Client) -> None:
             await clone.send_document(uid, media_path, caption=caption)
 
     async def _handle_admin_broadcast(client: Client, message: Message) -> None:
-        """Broadcast a message to every user across every clone bot.
-
-        Each clone bot only has permission to message people who have
-        started *that* clone — the main bot's client can't reach them.
-        So instead of sending everything through the main bot's client
-        (which silently failed for anyone who never started the main
-        bot), this groups users by which clone bot they belong to and
-        delivers through that clone's own running `Client`.
-        """
         main_pending.pop(message.from_user.id, None)
 
         async with AsyncSessionLocal() as session:
@@ -853,10 +957,9 @@ def register_main_handlers(app: Client) -> None:
             rows = result.all()
 
         from collections import defaultdict
-
         users_by_bot: dict[int, list[int]] = defaultdict(list)
-        for bot_id, uid in rows:
-            users_by_bot[bot_id].append(uid)
+        for b_id, uid in rows:
+            users_by_bot[b_id].append(uid)
 
         total = sum(len(v) for v in users_by_bot.values())
         if total == 0:
@@ -867,8 +970,6 @@ def register_main_handlers(app: Client) -> None:
             f"📣 Broadcasting to {total} users across {len(users_by_bot)} bot(s)…\n\n░░░░░░░░░░"
         )
 
-        # Media file_ids aren't portable across different bot tokens, so
-        # download once via the main bot and re-upload through each clone.
         media_path: str | None = None
         if message.media:
             try:
@@ -877,13 +978,12 @@ def register_main_handlers(app: Client) -> None:
                 media_path = None
 
         from pyrogram.errors import UserIsBlocked
-
         success = failed = blocked = offline = 0
         bots_reached = 0
         done = 0
 
-        for bot_id, user_ids in users_by_bot.items():
-            clone = manager.get(bot_id)
+        for b_id, user_ids in users_by_bot.items():
+            clone = manager.get(b_id)
             if clone is None:
                 offline += len(user_ids)
                 done += len(user_ids)
@@ -911,7 +1011,6 @@ def register_main_handlers(app: Client) -> None:
         if media_path:
             import contextlib
             import os
-
             with contextlib.suppress(OSError):
                 os.remove(media_path)
 
