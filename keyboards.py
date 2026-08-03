@@ -109,7 +109,7 @@ SUPPORT_USERNAME = "NexoraaBotss"
 SUPPORT_URL      = f"https://t.me/{SUPPORT_USERNAME}"
 
 # ── Image URLs ────────────────────────────────────────────────────────────────
-IMG_WELCOME = "https://graph.org/file/4e9cfe6722a743d0a791e-010fd8c5e3567948b8.jpg"
+IMG_WELCOME = "https://graph.org/file/ea216e97056aa00b9dc0b-a6c5c48f38d06dfe36.jpg"
 IMG_ADMIN   = "https://graph.org/file/e8087a3300ad254ff93d7-c9325cbef36a60e2b4.jpg"
 IMG_CLONE   = "https://graph.org/file/874c7523cf9fb087baae4-787a191131ca5d0bb7.jpg"
 
