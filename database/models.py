@@ -281,5 +281,9 @@ class CricketSettings(Base):
     max_players: Mapped[int] = mapped_column(Integer, default=0)   # 0 = unlimited
     max_captains: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
     reg_end_date: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Admin group chat — registration notifications are forwarded here
+    admin_gc: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Welcome/start image control
+    welcome_image_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     bot: Mapped["Bot"] = relationship(back_populates="cricket_settings")

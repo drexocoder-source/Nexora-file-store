@@ -174,20 +174,20 @@ def cricket_owner_panel_kb() -> InlineKeyboardMarkup:
     """Owner panel keyboard for cricket bots."""
     return InlineKeyboardMarkup([
         [
-            btn(PRIMARY, "🏆 Tours",     "own:crik:tours",    icon=EMOJI_TROPHY),
-            btn(PRIMARY, "👥 Players",   "own:crik:players",  icon=EMOJI_GUARD),
+            btn(PRIMARY, "Tours",     "own:crik:tours",    icon=EMOJI_TROPHY),
+            btn(PRIMARY, "Players",   "own:crik:players",  icon=EMOJI_GUARD),
         ],
         [
-            btn(YELLOW,  "⏳ Pending",   "own:crik:pending",  icon=EMOJI_BELL),
-            btn(YELLOW,  "👑 Captains",  "own:crik:captains", icon=EMOJI_CROWN),
+            btn(YELLOW,  "Pending",   "own:crik:pending",  icon=EMOJI_BELL),
+            btn(YELLOW,  "Captains",  "own:crik:captains", icon=EMOJI_CROWN),
         ],
         [
-            btn(BLUE,    "🎯 Questions", "own:crik:questions",icon=EMOJI_SPARKLE),
-            btn(BLUE,    "⚙️ Settings",  "own:crik:settings", icon=EMOJI_TOOLS),
+            btn(BLUE,    "Questions", "own:crik:questions",icon=EMOJI_SPARKLE),
+            btn(BLUE,    "Settings",  "own:crik:settings", icon=EMOJI_TOOLS),
         ],
         [
-            btn(GREEN,   "📊 Stats",     "own:crik:stats",    icon=EMOJI_CHART),
-            btn(GREEN,   "🚨 Logs",      "own:crik:logs",     icon=EMOJI_SIREN),
+            btn(GREEN,   "Stats",     "own:crik:stats",    icon=EMOJI_CHART),
+            btn(GREEN,   "Logs",      "own:crik:logs",     icon=EMOJI_SIREN),
         ],
-        [btn(RED,    "❌ Close",         "own:close",         icon=EMOJI_OCTAGON)],
+        [btn(RED,    "Close",         "own:close",         icon=EMOJI_OCTAGON)],
     ])

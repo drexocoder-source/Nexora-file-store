@@ -126,6 +126,9 @@ async def init_db() -> None:
                 END IF;
             END $$;
             """,
+            # New columns added to cricket_settings
+            "ALTER TABLE cricket_settings ADD COLUMN IF NOT EXISTS admin_gc BIGINT;",
+            "ALTER TABLE cricket_settings ADD COLUMN IF NOT EXISTS welcome_image_disabled BOOLEAN NOT NULL DEFAULT FALSE;",
         ]
         for sql in migrations:
             await conn.execute(text(sql))
