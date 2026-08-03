@@ -77,6 +77,10 @@ DEFAULT_QUESTIONS = [
 
 DEFAULT_WELCOME_IMAGE = "https://graph.org/file/874c7523cf9fb087baae4-787a191131ca5d0bb7.jpg"
 
+# Default base-price options (in CREDITS, not currency) shown to players during
+# registration. The owner can override this list from the settings panel.
+DEFAULT_BASE_PRICE_OPTIONS = [10, 50, 100]
+
 
 # ── IST helpers ───────────────────────────────────────────────────────────────
 
@@ -187,6 +191,26 @@ async def _record_action(bot_id: int, action: str) -> None:
     async with AsyncSessionLocal() as session:
         session.add(OwnerLog(bot_id=bot_id, action=action))
         await session.commit()
+
+
+def _parse_base_price_options(raw: str | None) -> list[int]:
+    """Parse the owner-configured credit options JSON, falling back to defaults."""
+    if not raw:
+        return DEFAULT_BASE_PRICE_OPTIONS.copy()
+    try:
+        values = json.loads(raw)
+        cleaned = sorted({int(v) for v in values if int(v) > 0})
+        return cleaned if cleaned else DEFAULT_BASE_PRICE_OPTIONS.copy()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return DEFAULT_BASE_PRICE_OPTIONS.copy()
+
+
+async def _get_base_price_options(bot_id: int) -> list[int]:
+    async with AsyncSessionLocal() as session:
+        s = await _get_or_create_settings(bot_id, session)
+        options = _parse_base_price_options(s.base_price_options)
+        await session.commit()
+    return options
 
 
 async def _player_of_user(bot_id: int, user_id: int) -> CricketPlayer | None:
@@ -365,6 +389,12 @@ def _role_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _base_price_kb(options: list[int]) -> InlineKeyboardMarkup:
+    rows = [[btn(PRIMARY, f"{opt} Credits", f"crik:bp:{opt}")] for opt in options]
+    rows.append([btn(DANGER, "Cancel", "crik:cancel", icon=EMOJI_X)])
+    return InlineKeyboardMarkup(rows)
+
+
 async def _wizard_role_selected(
     client: Client, cq: CallbackQuery, bot_id: int, user_id: int,
     role_key: str, pending: PendingAction,
@@ -373,10 +403,12 @@ async def _wizard_role_selected(
     pending.data["step"] = "base_price"
     role_label = ROLE_LABELS.get(role_key, role_key)
     clone_pending[(bot_id, user_id)] = pending
+
+    options = await _get_base_price_options(bot_id)
     await cq.message.edit_text(
         f"✅ Role: **{role_label}**\n\nStep 2 of 2+\n\n"
-        "💰 **Enter your base price (₹):**\nSend a number — e.g. `500`",
-        reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "crik:cancel", icon=EMOJI_X)]]),
+        "💰 **Select your base price:**",
+        reply_markup=_base_price_kb(options),
     )
 
 
@@ -387,15 +419,12 @@ async def handle_cricket_wizard_message(
     text = (message.text or "").strip()
 
     if step == "base_price":
-        cleaned = text.replace("₹", "").replace(",", "").strip()
-        if not cleaned.isdigit():
-            await message.reply_text(
-                f"{TXT_ERR} Please send a **number** only — e.g. `500`\n\nNo symbols needed.",
-                reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "crik:cancel", icon=EMOJI_X)]]),
-            )
-            return
-        pending.data["answers"]["base_price"] = f"₹{int(cleaned)}"
-        await _advance_to_next_question(client, message, bot_id, user_id, pending)
+        options = await _get_base_price_options(bot_id)
+        await message.reply_text(
+            f"{TXT_ERR} Please tap one of the **credit options** above instead of typing.",
+            reply_markup=_base_price_kb(options),
+        )
+        return
 
     elif step == "question":
         q_index = pending.data.get("q_index", 0)
@@ -859,6 +888,7 @@ async def _render_settings(target: Message, bot_id: int, edit: bool = False) -> 
         reg_end   = s.reg_end_date
         admin_gc  = s.admin_gc
         img_off   = s.welcome_image_disabled
+        bp_opts   = _parse_base_price_options(s.base_price_options)
         await session.commit()
 
     async with AsyncSessionLocal() as session:
@@ -873,6 +903,7 @@ async def _render_settings(target: Message, bot_id: int, edit: bool = False) -> 
     max_c_label = str(max_c) if max_c > 0 else "Unlimited"
     gc_label    = f"GC: {admin_gc}" if admin_gc else "Not set"
     img_label   = ("Disabled" if img_off else ("Custom" if custom_img else "Default"))
+    bp_label    = ", ".join(str(v) for v in bp_opts)
 
     rows = [
         [btn(dot(auto_app),  f"Auto-Approve: {'ON' if auto_app else 'OFF'}",       "own:crik:stoggle:auto_approve")],
@@ -880,6 +911,7 @@ async def _render_settings(target: Message, bot_id: int, edit: bool = False) -> 
         [btn(YELLOW,         f"Reg End Date: {end_label}",                           "own:crik:setdate")],
         [btn(BLUE,           f"Max Players: {max_p_label}",                          "own:crik:setmax:players")],
         [btn(BLUE,           f"Max Captains: {max_c_label}",                         "own:crik:setmax:captains")],
+        [btn(BLUE,           f"Base Price Options: {bp_label} Credits",              "own:crik:setbaseprice")],
         [btn(BLUE,           f"Admin GC: {gc_label}",                                "own:crik:gcmenu")],
         [btn(BLUE,           f"Start Image: {img_label}",                            "own:crik:imgmenu")],
         [btn(YELLOW,         "Back",                                                  "own:crik:home", icon=EMOJI_OCTAGON)],
@@ -1204,6 +1236,29 @@ async def handle_cricket_owner_message(
             reply_markup=InlineKeyboardMarkup([[btn(YELLOW, "Back", "own:crik:settings", icon=EMOJI_OCTAGON)]]),
         )
 
+    # ── Set base price credit options ─────────────────────────────────────────
+    elif action == "crik_set_baseprice":
+        clone_pending.pop((bot_id, user_id), None)
+        raw_values = [v.strip() for v in text.split(",") if v.strip()]
+        if not raw_values or not all(v.isdigit() and int(v) > 0 for v in raw_values):
+            await message.reply_text(
+                f"{TXT_ERR} Please send positive numbers separated by commas — e.g. `10, 50, 100`.",
+                reply_markup=InlineKeyboardMarkup([[btn(YELLOW, "Back", "own:crik:settings", icon=EMOJI_OCTAGON)]]),
+            )
+            return
+        options = sorted({int(v) for v in raw_values})
+        async with AsyncSessionLocal() as session:
+            s = await _get_or_create_settings(bot_id, session)
+            s.base_price_options = json.dumps(options)
+            await session.commit()
+        opt_str = ", ".join(str(v) for v in options)
+        await message.reply_text(
+            f"✅ Base price options updated: **{opt_str} Credits**\n\n"
+            "Players will now choose from these options during registration.",
+            reply_markup=InlineKeyboardMarkup([[btn(YELLOW, "Back", "own:crik:settings", icon=EMOJI_OCTAGON)]]),
+        )
+        await _record_action(bot_id, f"Base price options set: {opt_str} Credits")
+
     # ── Set admin GC via @username ────────────────────────────────────────────
     elif action == "crik_set_admingc":
         clone_pending.pop((bot_id, user_id), None)
@@ -1427,6 +1482,25 @@ async def dispatch_cricket_owner_action(
         except RPCError:
             await target.reply_text(f"{TXT_INFO} Send max number of {label} (0 = unlimited):")
 
+    elif action == "own:crik:setbaseprice":
+        clone_pending[(bot_id, user_id)] = PendingAction("crik_set_baseprice", {})
+        current = ", ".join(str(v) for v in await _get_base_price_options(bot_id))
+        try:
+            await target.edit_text(
+                f"{TXT_INFO} **Set Base Price Options**\n\n"
+                f"Currently: `{current}` Credits\n\n"
+                "Send the new options as numbers separated by commas.\n"
+                "Example: `10, 50, 100`\n\n"
+                "Players will pick one of these as their base price during registration "
+                "(in **Credits**, not currency).",
+                reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "own:crik:settings", icon=EMOJI_X)]]),
+            )
+        except RPCError:
+            await target.reply_text(
+                f"{TXT_INFO} Send the new base price options separated by commas (e.g. `10, 50, 100`):",
+                reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "own:crik:settings", icon=EMOJI_X)]]),
+            )
+
     # ── Admin GC actions ──────────────────────────────────────────────────────
     elif action == "own:crik:gcmenu":
         await _render_gc_menu(target, bot_id, user_id)
@@ -1598,6 +1672,16 @@ def register_cricket_handlers(app: Client, bot_id: int) -> None:
                 await cq.answer("Session expired. Start again.", show_alert=True)
                 return
             await _wizard_role_selected(client, cq, bot_id, user_id, role_key, pending)
+
+        elif data.startswith("crik:bp:"):
+            value   = data.split(":")[2]
+            pending = clone_pending.get((bot_id, user_id))
+            if not pending or pending.action != "crik_wizard":
+                await cq.answer("Session expired. Start again.", show_alert=True)
+                return
+            pending.data["answers"]["base_price"] = f"{value} Credits"
+            clone_pending[(bot_id, user_id)] = pending
+            await _advance_to_next_question(client, cq.message, bot_id, user_id, pending)
 
         elif data.startswith("crik:ch:"):
             parts        = data.split(":")
