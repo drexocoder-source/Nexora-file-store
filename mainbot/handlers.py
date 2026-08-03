@@ -669,15 +669,31 @@ def register_main_handlers(app: Client) -> None:
 
         elif data.startswith("rmbot_yes:"):
             b_id = int(data.split(":")[1])
-            async with AsyncSessionLocal() as session:
-                bot_row = await session.get(BotModel, b_id)
-                if bot_row is None:
-                    await cq.answer("Already deleted.", show_alert=True)
-                    return
-                username = bot_row.bot_username
-                await session.delete(bot_row)
-                await session.commit()
-            await manager.stop_clone(b_id)
+            try:
+                async with AsyncSessionLocal() as session:
+                    bot_row = await session.get(BotModel, b_id)
+                    if bot_row is None:
+                        await cq.answer("Already deleted.", show_alert=True)
+                        return
+                    username = bot_row.bot_username
+                    await session.delete(bot_row)
+                    await session.commit()
+            except Exception:
+                log.exception("Failed to delete bot %s", b_id)
+                await cq.answer("❌ Delete failed — try again in a moment.", show_alert=True)
+                try:
+                    await cq.message.edit_text(
+                        f"{TXT_ERR} Something went wrong deleting that bot. Please try again.",
+                        reply_markup=back_kb(),
+                    )
+                except RPCError:
+                    pass
+                return
+
+            try:
+                await manager.stop_clone(b_id)
+            except Exception:
+                log.exception("Failed to stop clone worker for bot %s (db row already deleted)", b_id)
             await _log_main(client, f"🚨 🗑 Clone deleted: @{username} (id {b_id})")
             try:
                 await cq.message.edit_text(
