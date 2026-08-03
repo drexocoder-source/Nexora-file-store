@@ -95,17 +95,23 @@ async def _log_event(client: Client, bot_row: BotModel, text: str) -> None:
         log.exception("Failed to write clone log for bot %s", bot_row.id)
 
 
-async def _get_bot(session: AsyncSession, bot_id: int) -> BotModel | None:
-    return await session.get(
-        BotModel,
-        bot_id,
-        options=[
-            selectinload(BotModel.channels),
-            selectinload(BotModel.settings),
-            selectinload(BotModel.files),
-            selectinload(BotModel.protected_links),
-        ],
-    )
+async def _get_bot(
+    session: AsyncSession, bot_id: int,
+    include_files: bool = False, include_links: bool = False,
+) -> BotModel | None:
+    """Fetch a Bot row with its cheap, near-universally-needed relationships
+    eager-loaded (channels, settings). `files` and `protected_links` can grow
+    unbounded per bot, so they're only eager-loaded when a caller actually
+    needs them (backup export, delete-all-files) — loading them on every
+    /start and every owner-panel tap was making every clone bot interaction
+    do a full files-table fetch for no reason.
+    """
+    options = [selectinload(BotModel.channels), selectinload(BotModel.settings)]
+    if include_files:
+        options.append(selectinload(BotModel.files))
+    if include_links:
+        options.append(selectinload(BotModel.protected_links))
+    return await session.get(BotModel, bot_id, options=options)
 
 
 async def _record_owner_action(bot_id: int, action: str) -> None:
@@ -602,7 +608,7 @@ def register_clone_handlers(app: Client) -> None:
 
         elif action == "own:delall_yes":
             async with AsyncSessionLocal() as session:
-                bot_row = await _get_bot(session, bot_id)
+                bot_row = await _get_bot(session, bot_id, include_files=True)
                 for f in list(bot_row.files):
                     await session.delete(f)
                 await session.commit()
@@ -612,7 +618,7 @@ def register_clone_handlers(app: Client) -> None:
         # ── links (linkprotect) ──
         elif action == "own:links":
             async with AsyncSessionLocal() as session:
-                bot_row = await _get_bot(session, bot_id)
+                bot_row = await _get_bot(session, bot_id, include_links=True)
                 links = list(bot_row.protected_links)
                 me = await client.get_me()
             rows = []
@@ -718,7 +724,7 @@ def register_clone_handlers(app: Client) -> None:
         # ── backup ──
         elif action == "own:backup":
             async with AsyncSessionLocal() as session:
-                bot_row = await _get_bot(session, bot_id)
+                bot_row = await _get_bot(session, bot_id, include_files=True, include_links=True)
                 payload = {
                     "bot_username": bot_row.bot_username,
                     "bot_type": bot_row.bot_type,
