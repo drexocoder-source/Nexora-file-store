@@ -189,5 +189,8 @@ def cricket_owner_panel_kb() -> InlineKeyboardMarkup:
             btn(GREEN,   "Stats",     "own:crik:stats",    icon=EMOJI_CHART),
             btn(GREEN,   "Logs",      "own:crik:logs",     icon=EMOJI_SIREN),
         ],
+        [
+            btn(BLUE,    "Channels / FSub", "own:crik:channels", icon=EMOJI_DEVIL),
+        ],
         [btn(RED,    "Close",         "own:close",         icon=EMOJI_OCTAGON)],
     ])

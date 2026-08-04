@@ -886,10 +886,26 @@ def register_main_handlers(app: Client) -> None:
                 pass
 
         elif data == "adm:broadcast":
-            main_pending[user_id] = PendingAction("await_admin_broadcast")
             try:
                 await cq.message.edit_text(
-                    f"{TXT_INFO} 📣 Send the message you want to broadcast to **all users across all bots**.",
+                    "📣 **Broadcast — Choose Target**\n\n"
+                    "Who should receive this message?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [btn(PRIMARY, "📡 All Bot Users",     "adm:bc_target:all_users", icon=EMOJI_GLOBE)],
+                        [btn(YELLOW,  "👑 Bot Owners Only",   "adm:bc_target:owners",    icon=EMOJI_CROWN)],
+                        [btn(DANGER,  "🔙 Cancel",             "adm:home",                icon=EMOJI_OCTAGON)],
+                    ]),
+                )
+            except RPCError:
+                pass
+
+        elif data.startswith("adm:bc_target:"):
+            target = data.split(":")[2]
+            label = "all users across all bots" if target == "all_users" else "all bot owners"
+            main_pending[user_id] = PendingAction("await_admin_broadcast", {"target": target})
+            try:
+                await cq.message.edit_text(
+                    f"{TXT_INFO} 📣 Send the message to broadcast to **{label}**.",
                     reply_markup=InlineKeyboardMarkup([[btn(DANGER, "🔙 Cancel", "adm:home", icon=EMOJI_OCTAGON)]]),
                 )
             except RPCError:
@@ -966,8 +982,14 @@ def register_main_handlers(app: Client) -> None:
             await clone.send_document(uid, media_path, caption=caption)
 
     async def _handle_admin_broadcast(client: Client, message: Message) -> None:
-        main_pending.pop(message.from_user.id, None)
+        pending = main_pending.pop(message.from_user.id, None)
+        target = (pending.data or {}).get("target", "all_users") if pending else "all_users"
 
+        if target == "owners":
+            await _handle_owners_broadcast(client, message)
+            return
+
+        # ── All bot users broadcast ───────────────────────────────────────────
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(CloneUser.bot_id, CloneUser.user_id))
             rows = result.all()
@@ -1040,7 +1062,69 @@ def register_main_handlers(app: Client) -> None:
         )
         await _log_main(
             client,
-            f"📣 **Superadmin Broadcast Finished**\n"
+            f"📣 **Superadmin Broadcast Finished** (All Users)\n"
             f"Bots reached: {bots_reached}/{len(users_by_bot)}\n"
             f"✔️ {success}  ❌ {failed}  🚫 {blocked}  ⏸️ {offline}",
+        )
+
+    async def _handle_owners_broadcast(client: Client, message: Message) -> None:
+        """Broadcast via the main bot directly to all registered bot owners."""
+        from pyrogram.errors import UserIsBlocked
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Owner.telegram_id))
+            owner_ids = [row[0] for row in result.all()]
+
+        total = len(owner_ids)
+        if total == 0:
+            await message.reply_text(f"{TXT_WARN} No bot owners registered yet.")
+            return
+
+        progress = await message.reply_text(
+            f"👑 Broadcasting to {total} owner(s)…\n\n░░░░░░░░░░"
+        )
+
+        media_path: str | None = None
+        if message.media:
+            try:
+                media_path = await message.download()
+            except RPCError:
+                media_path = None
+
+        success = failed = blocked = 0
+        for i, uid in enumerate(owner_ids, 1):
+            try:
+                await _copy_admin_broadcast(client, uid, message, media_path)
+                success += 1
+            except UserIsBlocked:
+                blocked += 1
+            except RPCError:
+                failed += 1
+
+            if i % max(1, total // 10) == 0 or i == total:
+                filled = int((i / total) * 10)
+                bar = "█" * filled + "░" * (10 - filled)
+                try:
+                    await progress.edit_text(f"👑 Broadcasting to owners…\n\n{bar}\n{i}/{total}")
+                except RPCError:
+                    pass
+
+        if media_path:
+            import contextlib
+            import os
+            with contextlib.suppress(OSError):
+                os.remove(media_path)
+
+        await progress.edit_text(
+            f"✅ **Owners Broadcast Complete**\n\n"
+            f"👑 Total owners: **{total}**\n"
+            f"✔️ Success: **{success}**\n"
+            f"❌ Failed: **{failed}**\n"
+            f"🚫 Blocked: **{blocked}**"
+        )
+        await _log_main(
+            client,
+            f"📣 **Superadmin Broadcast Finished** (Owners Only)\n"
+            f"Owners targeted: {total}\n"
+            f"✔️ {success}  ❌ {failed}  🚫 {blocked}",
         )

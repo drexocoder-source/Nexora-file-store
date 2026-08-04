@@ -244,6 +244,9 @@ class CricketPlayer(Base):
     role: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_captain: Mapped[bool] = mapped_column(Boolean, default=False)
     base_price: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Captain-specific fields
+    team_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    team_logo: Mapped[str | None] = mapped_column(Text, nullable=True)
     # status: pending | approved | rejected | waitlisted | deregistered
     status: Mapped[str] = mapped_column(String(16), default="pending")
     answers: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
@@ -267,6 +270,8 @@ class CricketQuestion(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     required: Mapped[bool] = mapped_column(Boolean, default=False)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
+    # If True, this question is only shown to captains (not regular players)
+    captain_only: Mapped[bool] = mapped_column(Boolean, default=False)
 
     bot: Mapped["Bot"] = relationship(back_populates="cricket_questions")
 

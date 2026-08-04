@@ -43,6 +43,9 @@ async def start_existing_clones() -> None:
 # keeps every entry safe to re-run on every restart).
 MIGRATIONS: list[str] = [
     "ALTER TABLE cricket_settings ADD COLUMN IF NOT EXISTS base_price_options TEXT",
+    "ALTER TABLE cricket_players ADD COLUMN IF NOT EXISTS team_name VARCHAR(128)",
+    "ALTER TABLE cricket_players ADD COLUMN IF NOT EXISTS team_logo TEXT",
+    "ALTER TABLE cricket_questions ADD COLUMN IF NOT EXISTS captain_only BOOLEAN DEFAULT FALSE",
 ]
 
 

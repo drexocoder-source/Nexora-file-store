@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from database.engine import AsyncSessionLocal
 from database.models import (
     Bot as BotModel,
+    BotChannel,
     CricketPlayer,
     CricketQuestion,
     CricketSettings,
@@ -33,13 +34,14 @@ from database.models import (
 )
 from keyboards import (
     BLUE, DANGER, DEFAULT, GREEN, PRIMARY, RED, SUCCESS, YELLOW,
-    EMOJI_BELL, EMOJI_CHART, EMOJI_CHECK, EMOJI_CROWN, EMOJI_FIRE,
-    EMOJI_GUARD, EMOJI_MIC, EMOJI_OCTAGON, EMOJI_SIREN,
+    EMOJI_BELL, EMOJI_CHART, EMOJI_CHECK, EMOJI_CROWN, EMOJI_DEVIL,
+    EMOJI_FIRE, EMOJI_GUARD, EMOJI_MIC, EMOJI_OCTAGON, EMOJI_SIREN,
     EMOJI_SPARKLE, EMOJI_STAR, EMOJI_TOOLS, EMOJI_TRASH, EMOJI_TROPHY,
     EMOJI_X, cricket_owner_panel_kb,
     TXT_ERR, TXT_INFO, TXT_WARN, TXT_OK,
     btn, quote, yes_no_kb,
 )
+from utils.fsub import missing_channels
 from utils.state import PendingAction, clone_pending
 
 log = logging.getLogger("nexora.cricket")
@@ -122,12 +124,14 @@ async def _get_active_tour(bot_id: int) -> CricketTour | None:
         return r.scalar_one_or_none()
 
 
-async def _get_enabled_questions(bot_id: int) -> list[CricketQuestion]:
+async def _get_enabled_questions(bot_id: int, is_captain: bool = False) -> list[CricketQuestion]:
+    """Return enabled questions. captain_only questions are excluded for regular players."""
     async with AsyncSessionLocal() as session:
+        cond = [CricketQuestion.bot_id == bot_id, CricketQuestion.enabled.is_(True)]
+        if not is_captain:
+            cond.append(CricketQuestion.captain_only.is_(False))
         r = await session.execute(
-            select(CricketQuestion)
-            .where(CricketQuestion.bot_id == bot_id, CricketQuestion.enabled.is_(True))
-            .order_by(CricketQuestion.order_index)
+            select(CricketQuestion).where(*cond).order_by(CricketQuestion.order_index)
         )
         return list(r.scalars().all())
 
@@ -264,6 +268,34 @@ async def handle_cricket_start(
 ) -> None:
     user_id = message.from_user.id
 
+    # ── FSub check for registration ───────────────────────────────────────────
+    if not is_owner:
+        async with AsyncSessionLocal() as session:
+            ch_result = await session.execute(
+                select(BotChannel).where(BotChannel.bot_id == bot_id)
+            )
+            channels = list(ch_result.scalars().all())
+        if channels:
+            missing = await missing_channels(client, channels, user_id)
+            if missing:
+                rows = []
+                for ch in missing:
+                    label = ch.title or ch.username or "Channel"
+                    link  = f"https://t.me/{ch.username}" if ch.username else None
+                    rows.append([
+                        btn(BLUE, f"Join {label}", url=link, icon=EMOJI_DEVIL)
+                        if link else btn(BLUE, label, "crik:noop_fsub", icon=EMOJI_DEVIL)
+                    ])
+                rows.append([btn(GREEN, "✅ Verify Membership", "crik:fsub_verify")])
+                await message.reply_text(
+                    "😈 **Join the required channels first**\n\n"
+                    "You must be a member to register for this tournament.\n"
+                    "Join below, then press **Verify Membership**.",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                    reply_parameters=quote(message.id),
+                )
+                return
+
     async with AsyncSessionLocal() as session:
         settings = await _get_or_create_settings(bot_id, session)
         auto_app   = settings.auto_approve
@@ -367,7 +399,7 @@ async def _start_wizard(
             await target.reply_text(f"⛔ Player slots are full ({max_p}/{max_p}). Contact the admin.")
             return
 
-    questions = await _get_enabled_questions(bot_id)
+    questions = await _get_enabled_questions(bot_id, is_captain=is_captain)
     clone_pending[(bot_id, user_id)] = PendingAction("crik_wizard", {
         "step": "role", "is_captain": is_captain,
         "answers": {}, "questions": [q.id for q in questions], "q_index": 0,
@@ -412,6 +444,32 @@ async def _wizard_role_selected(
     )
 
 
+async def _ask_team_name(target: Message, bot_id: int, user_id: int, pending: PendingAction) -> None:
+    """Prompt captain for their team name."""
+    pending.data["step"] = "team_name"
+    clone_pending[(bot_id, user_id)] = pending
+    await target.reply_text(
+        "👑 **Captain Registration**\n\nStep — Team Details\n\n"
+        "🏏 **What is your team name?**\nSend the name of the team you will be captaining.",
+        reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "crik:cancel", icon=EMOJI_X)]]),
+    )
+
+
+async def _ask_team_logo(target: Message, bot_id: int, user_id: int, pending: PendingAction) -> None:
+    """Prompt captain for their team logo URL (optional)."""
+    pending.data["step"] = "team_logo"
+    clone_pending[(bot_id, user_id)] = pending
+    await target.reply_text(
+        "🖼 **Team Logo** _(optional)_\n\n"
+        "Send a direct image URL for your team logo (must start with `https://`),\n"
+        "or tap **Skip** to continue without one.",
+        reply_markup=InlineKeyboardMarkup([
+            [btn(DEFAULT, "Skip", "crik:skip_team_logo")],
+            [btn(DANGER,  "Cancel", "crik:cancel", icon=EMOJI_X)],
+        ]),
+    )
+
+
 async def handle_cricket_wizard_message(
     client: Client, message: Message, bot_id: int, user_id: int, pending: PendingAction,
 ) -> None:
@@ -424,6 +482,34 @@ async def handle_cricket_wizard_message(
             f"{TXT_ERR} Please tap one of the **credit options** above instead of typing.",
             reply_markup=_base_price_kb(options),
         )
+        return
+
+    elif step == "team_name":
+        if not text:
+            await message.reply_text(
+                f"{TXT_ERR} Please send your **team name**.",
+                reply_markup=InlineKeyboardMarkup([[btn(DANGER, "Cancel", "crik:cancel", icon=EMOJI_X)]]),
+            )
+            return
+        pending.data["team_name"] = text[:128]
+        clone_pending[(bot_id, user_id)] = pending
+        await _ask_team_logo(message, bot_id, user_id, pending)
+        return
+
+    elif step == "team_logo":
+        if text.startswith("http://") or text.startswith("https://"):
+            pending.data["team_logo"] = text[:500]
+        else:
+            await message.reply_text(
+                f"{TXT_ERR} Please send a valid image URL starting with `https://`, or tap **Skip**.",
+                reply_markup=InlineKeyboardMarkup([
+                    [btn(DEFAULT, "Skip", "crik:skip_team_logo")],
+                    [btn(DANGER,  "Cancel", "crik:cancel", icon=EMOJI_X)],
+                ]),
+            )
+            return
+        clone_pending[(bot_id, user_id)] = pending
+        await _advance_to_next_question(client, message, bot_id, user_id, pending)
         return
 
     elif step == "question":
@@ -519,6 +605,12 @@ async def _finish_wizard(
         f"🎯 Role: {role_label}",
         f"💰 Base Price: {base_price}",
     ]
+    if is_captain:
+        team_name = pending.data.get("team_name", "—")
+        team_logo = pending.data.get("team_logo")
+        lines.append(f"🏏 Team Name: {team_name}")
+        if team_logo:
+            lines.append(f"🖼 Team Logo: {team_logo}")
     for k, v in answers.items():
         if k in ("role", "base_price"):
             continue
@@ -557,6 +649,10 @@ async def _submit_registration(
     base_price = answers.get("base_price")
     extras     = {k: v for k, v in answers.items() if k not in ("role", "base_price")}
 
+    # Captain-specific fields
+    team_name = pending.data.get("team_name") if is_captain else None
+    team_logo = pending.data.get("team_logo") if is_captain else None
+
     initial_status = "approved" if auto_approve else "pending"
 
     async with AsyncSessionLocal() as session:
@@ -565,6 +661,7 @@ async def _submit_registration(
             user_id=user_id, username=cq.from_user.username,
             full_name=cq.from_user.first_name, role=role_key,
             is_captain=is_captain, base_price=base_price,
+            team_name=team_name, team_logo=team_logo,
             status=initial_status, answers=json.dumps(extras) if extras else None,
         )
         session.add(player)
@@ -576,18 +673,21 @@ async def _submit_registration(
 
     role_label = ROLE_LABELS.get(role_key or "", role_key or "—")
     cap_label  = "👑 Captain" if is_captain else "🏏 Player"
+    team_line  = (f"\n🏏 Team: {team_name}" if team_name else "")
 
     if auto_approve:
         await cq.message.edit_text(
             f"✅ **Registration Approved!**\n\nWelcome aboard, {cq.from_user.first_name}! 🎉\n\n"
-            f"🎭 Type: {cap_label}\n🎯 Role: {role_label}\n💰 Base Price: {base_price}\n"
-            + (f"🏆 Tour: {tour.name}" if tour else ""),
+            f"🎭 Type: {cap_label}\n🎯 Role: {role_label}\n💰 Base Price: {base_price}"
+            + team_line
+            + ("\n" + f"🏆 Tour: {tour.name}" if tour else ""),
         )
     else:
         await cq.message.edit_text(
             f"⏳ **Registration Submitted!**\n\nHi {cq.from_user.first_name}, your registration is under review.\n"
             "You'll be notified once the admin approves it.\n\n"
-            f"🎭 Type: {cap_label}\n🎯 Role: {role_label}\n💰 Base Price: {base_price}",
+            f"🎭 Type: {cap_label}\n🎯 Role: {role_label}\n💰 Base Price: {base_price}"
+            + team_line,
         )
 
     handle       = f"@{cq.from_user.username}" if cq.from_user.username else f"id:{user_id}"
@@ -597,6 +697,8 @@ async def _submit_registration(
         f"🏏 **New {'Captain' if is_captain else 'Player'} Registration**\n\n"
         f"👤 Name: {cq.from_user.first_name} ({handle})\n"
         f"🎯 Role: {role_label}\n💰 Base Price: {base_price}\n"
+        + (f"🏏 Team: {team_name}\n" if team_name else "")
+        + (f"🖼 Logo: {team_logo}\n" if team_logo else "")
         + (f"🏆 Tour: {tour.name}\n" if tour else "")
         + f"📋 Status: {'Auto-approved ✅' if auto_approve else 'Pending approval ⏳'}"
     )
@@ -723,6 +825,35 @@ def _paginate_kb(action_prefix: str, page: int, total: int, back_cb: str) -> lis
         rows.append(nav)
     rows.append([btn(YELLOW, "Back", back_cb, icon=EMOJI_OCTAGON)])
     return rows
+
+
+# ── Cricket FSub channel management ──────────────────────────────────────────
+
+async def _render_cricket_channels(target: Message, bot_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        r = await session.execute(
+            select(BotChannel).where(BotChannel.bot_id == bot_id)
+        )
+        channels = list(r.scalars().all())
+
+    lines = ["😈 **Force-Subscribe Channels**\n",
+             "Users must join these channels before they can register.\n"]
+    rows  = []
+
+    if not channels:
+        lines.append("No channels configured yet.")
+    for ch in channels:
+        label = ch.title or ch.username or str(ch.chat_id)
+        lines.append(f"• {label}")
+        rows.append([btn(DANGER, f"Remove: {label[:30]}", f"own:crik:rmch:{ch.id}", icon=EMOJI_TRASH)])
+
+    rows.append([btn(SUCCESS, "Add Channel",  "own:crik:addch",   icon=EMOJI_SPARKLE)])
+    rows.append([btn(YELLOW,  "Back",         "own:crik:home",    icon=EMOJI_OCTAGON)])
+
+    try:
+        await target.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+    except RPCError:
+        await target.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
 
 # ── Owner panel sections ──────────────────────────────────────────────────────
@@ -853,20 +984,25 @@ async def _render_pending(target: Message, bot_id: int, page: int) -> None:
 async def _render_questions(target: Message, bot_id: int) -> None:
     questions = await _get_all_questions(bot_id)
     lines = ["🎯 **Registration Questions**\n",
-             "These appear after Role and Base Price in the wizard.\n"]
+             "These appear after Role and Base Price in the wizard.\n",
+             "👑 = Captain-only question\n"]
     rows  = []
 
     if not questions:
         lines.append("No extra questions configured.")
     for q in questions:
-        st  = "✅" if q.enabled else "❌"
-        req = " _(required)_" if q.required else ""
-        lines.append(f"{st} **{q.label}** `[{q.input_type}]`{req}")
+        st   = "✅" if q.enabled else "❌"
+        req  = " _(req)_" if q.required else ""
+        cap  = " 👑" if q.captain_only else ""
+        lines.append(f"{st} **{q.label}** `[{q.input_type}]`{req}{cap}")
         rows.append([
             btn(GREEN if q.enabled else RED,
-                f"{'ON' if q.enabled else 'OFF'}: {q.label[:22]}",
+                f"{'ON' if q.enabled else 'OFF'}: {q.label[:18]}",
                 f"own:crik:qtoggle:{q.id}"),
-            btn(RED, "Delete", f"own:crik:qdelete:{q.id}", icon=EMOJI_TRASH),
+            btn(YELLOW if q.captain_only else DEFAULT,
+                "👑 Cap" if q.captain_only else "All",
+                f"own:crik:qtoggle_cap:{q.id}"),
+            btn(RED, "Del", f"own:crik:qdelete:{q.id}", icon=EMOJI_TRASH),
         ])
 
     rows.append([btn(PRIMARY, "Add Question", "own:crik:qadd",     icon=EMOJI_SPARKLE)])
@@ -1306,6 +1442,85 @@ async def handle_cricket_owner_message(
         )
         await _record_action(bot_id, f"Admin GC set: {title}")
 
+    # ── Add FSub channel ─────────────────────────────────────────────────────
+    elif action == "crik_addch":
+        clone_pending.pop((bot_id, user_id), None)
+        from pyrogram.enums import ChatType as _ChatType
+
+        chat = None
+        if message.forward_from_chat:
+            chat = message.forward_from_chat
+        else:
+            username = text.lstrip("@")
+            try:
+                chat = await client.get_chat(username)
+            except RPCError:
+                await message.reply_text(
+                    f"{TXT_ERR} Couldn't find that channel. Make sure the bot is an admin there first.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [[btn(YELLOW, "Back", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+                    ),
+                )
+                return
+
+        if chat is None:
+            await message.reply_text(
+                f"{TXT_ERR} Please forward a message from the channel or send its @username.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[btn(YELLOW, "Back", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+                ),
+            )
+            return
+
+        try:
+            member = await client.get_chat_member(chat.id, "me")
+        except RPCError:
+            await message.reply_text(
+                f"{TXT_ERR} This bot must be an **admin** of that channel first.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[btn(YELLOW, "Back", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+                ),
+            )
+            return
+        if member.status.name not in ("ADMINISTRATOR", "OWNER"):
+            await message.reply_text(
+                f"{TXT_ERR} This bot must be an **admin** of that channel first.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[btn(YELLOW, "Back", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+                ),
+            )
+            return
+
+        async with AsyncSessionLocal() as session:
+            existing = await session.execute(
+                select(BotChannel).where(BotChannel.bot_id == bot_id, BotChannel.chat_id == chat.id)
+            )
+            if existing.scalar_one_or_none():
+                await message.reply_text(
+                    f"{TXT_WARN} That channel is already in the FSub list.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [[btn(YELLOW, "Back", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+                    ),
+                )
+                return
+            session.add(BotChannel(
+                bot_id=bot_id,
+                chat_id=chat.id,
+                username=getattr(chat, "username", None),
+                title=getattr(chat, "title", None),
+            ))
+            await session.commit()
+
+        label = getattr(chat, "title", None) or getattr(chat, "username", str(chat.id))
+        await message.reply_text(
+            f"✅ **{label}** added as a force-subscribe channel.\n\n"
+            "Users must join this channel before registering.",
+            reply_markup=InlineKeyboardMarkup(
+                [[btn(YELLOW, "Back to Channels", "own:crik:channels", icon=EMOJI_OCTAGON)]]
+            ),
+        )
+        await _record_action(bot_id, f"FSub channel added: {label}")
+
     # ── Set welcome image URL ─────────────────────────────────────────────────
     elif action == "crik_set_welcome_img":
         clone_pending.pop((bot_id, user_id), None)
@@ -1572,6 +1787,51 @@ async def dispatch_cricket_owner_action(
     elif action == "own:crik:logs" or action.startswith("own:crik:logs:"):
         page = int(action.split(":")[-1]) if action != "own:crik:logs" else 0
         await _render_logs(target, bot_id, page)
+
+    # ── FSub / Channels ───────────────────────────────────────────────────────
+    elif action == "own:crik:channels":
+        await _render_cricket_channels(target, bot_id)
+
+    elif action == "own:crik:addch":
+        clone_pending[(bot_id, user_id)] = PendingAction("crik_addch", {})
+        try:
+            await target.edit_text(
+                f"{TXT_INFO} **Add Force-Subscribe Channel**\n\n"
+                "Forward a message **from the channel** you want users to join before registering,\n"
+                "or send its **@username**.\n\n"
+                "Make sure this bot is an **admin** in that channel first.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[btn(DANGER, "Cancel", "own:crik:channels", icon=EMOJI_X)]]
+                ),
+            )
+        except RPCError:
+            await target.reply_text(
+                f"{TXT_INFO} Forward a message from the channel or send its @username:",
+                reply_markup=InlineKeyboardMarkup(
+                    [[btn(DANGER, "Cancel", "own:crik:channels", icon=EMOJI_X)]]
+                ),
+            )
+
+    elif action.startswith("own:crik:rmch:"):
+        ch_id = int(action.split(":")[3])
+        async with AsyncSessionLocal() as session:
+            ch = await session.get(BotChannel, ch_id)
+            if ch and ch.bot_id == bot_id:
+                label = ch.title or ch.username or str(ch.chat_id)
+                await session.delete(ch)
+                await session.commit()
+                await _record_action(bot_id, f"FSub channel removed: {label}")
+        await _render_cricket_channels(target, bot_id)
+
+    # ── Captain-only question toggle ──────────────────────────────────────────
+    elif action.startswith("own:crik:qtoggle_cap:"):
+        q_id = int(action.split(":")[3])
+        async with AsyncSessionLocal() as session:
+            q = await session.get(CricketQuestion, q_id)
+            if q and q.bot_id == bot_id:
+                q.captain_only = not q.captain_only
+                await session.commit()
+        await _render_questions(target, bot_id)
 
 
 # ── Date picker callback handler ──────────────────────────────────────────────
